@@ -1,103 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { Download, MonitorCheck, Share, PlusSquare, X } from 'lucide-react';
-
-interface BeforeInstallPromptEvent extends Event {
-  readonly platforms: string[];
-  readonly userChoice: Promise<{
-    outcome: 'accepted' | 'dismissed';
-    platform: string;
-  }>;
-  prompt(): Promise<void>;
-}
-
-export function usePWAInstall() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstalled, setIsInstalled] = useState<boolean>(false);
-  const [isIOS, setIsIOS] = useState<boolean>(false);
-  const [showIOSModal, setShowIOSModal] = useState<boolean>(false);
-
-  useEffect(() => {
-    // 1. Check standalone mode (desktop PWA / mobile app)
-    const checkStandalone = () => {
-      const isStandaloneMode =
-        window.matchMedia('(display-mode: standalone)').matches ||
-        window.matchMedia('(display-mode: window-controls-overlay)').matches ||
-        (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
-        document.referrer.includes('android-app://');
-
-      setIsInstalled(Boolean(isStandaloneMode));
-    };
-
-    checkStandalone();
-
-    const mediaQuery = window.matchMedia('(display-mode: standalone)');
-    const handleMediaChange = (e: MediaQueryListEvent) => {
-      if (e.matches) {
-        setIsInstalled(true);
-        setDeferredPrompt(null);
-      }
-    };
-    mediaQuery.addEventListener?.('change', handleMediaChange);
-
-    // 2. Detect iOS
-    const userAgent = window.navigator.userAgent.toLowerCase();
-    const isIOSDevice = /iphone|ipad|ipod/.test(userAgent) && !(window as unknown as { MSStream?: unknown }).MSStream;
-    setIsIOS(isIOSDevice);
-
-    // 3. Listen for browser install prompt
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-    };
-
-    const handleAppInstalled = () => {
-      setIsInstalled(true);
-      setDeferredPrompt(null);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    window.addEventListener('appinstalled', handleAppInstalled);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', handleAppInstalled);
-      mediaQuery.removeEventListener?.('change', handleMediaChange);
-    };
-  }, []);
-
-  const installPWA = useCallback(async (): Promise<boolean> => {
-    if (deferredPrompt) {
-      try {
-        await deferredPrompt.prompt();
-        const choiceResult = await deferredPrompt.userChoice;
-        if (choiceResult.outcome === 'accepted') {
-          setIsInstalled(true);
-          setDeferredPrompt(null);
-          return true;
-        } else {
-          return false;
-        }
-      } catch (err) {
-        console.error('[PWA] Error during install prompt:', err);
-        return false;
-      }
-    } else if (isIOS) {
-      setShowIOSModal(true);
-      return false;
-    }
-    return false;
-  }, [deferredPrompt, isIOS]);
-
-  return {
-    isInstalled,
-    canInstall: !isInstalled && (deferredPrompt !== null || isIOS),
-    hasPrompt: deferredPrompt !== null,
-    isIOS,
-    showIOSModal,
-    setShowIOSModal,
-    installPWA,
-  };
-}
+import { usePWAInstall } from '../lib/usePWAInstall';
 
 interface PWAInstallButtonProps {
   className?: string;
@@ -110,7 +13,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ className = 
     isIOS,
     showIOSModal,
     setShowIOSModal,
-    installPWA,
+    install,
   } = usePWAInstall();
 
   // If in Standalone Mode (Desktop App / Mobile App installed)
@@ -135,11 +38,11 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ className = 
         type="button"
         onClick={() => {
           if (hasPrompt) {
-            installPWA();
+            install();
           } else if (isIOS) {
             setShowIOSModal(true);
           } else {
-            installPWA();
+            install();
           }
         }}
         className={`relative group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-emerald-600 to-[#15803D] hover:from-emerald-700 hover:to-emerald-800 text-white text-xs font-bold shadow-xs hover:shadow-md transition-all active:scale-95 cursor-pointer select-none ${className}`}
