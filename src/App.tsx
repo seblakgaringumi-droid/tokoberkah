@@ -14,8 +14,8 @@ import {
   Order, 
   DebtCredit, 
   Expense, 
-  StoreWallet,
-  StoreProfile
+  StoreWallet, 
+  StoreProfile 
 } from './types';
 import { 
   fetchProducts, 
@@ -28,7 +28,8 @@ import {
   DEFAULT_STORE_PROFILE,
   seedInitialProductsIfEmpty
 } from './services/api';
-import { testConnection } from './lib/supabase';
+import { supabase, testConnection } from './lib/supabase';
+import { formatRupiah, playBeep, requestNotificationPermission, showOrderNotification } from './lib/utils';
 import { AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
 
 export default function App() {
@@ -49,6 +50,16 @@ export default function App() {
   const [wallet, setWallet] = useState<StoreWallet | null>(null);
   const [storeProfile, setStoreProfile] = useState<StoreProfile>(DEFAULT_STORE_PROFILE);
   const [isStoreSettingsOpen, setIsStoreSettingsOpen] = useState(false);
+
+  // Web Notification Permission State
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(() => {
+    return 'Notification' in window ? Notification.permission : 'denied';
+  });
+
+  const handleRequestPermission = async () => {
+    const perm = await requestNotificationPermission();
+    setNotifPermission(perm);
+  };
 
   // Check connection and load all tables
   const loadAllData = useCallback(async (isInitial = false) => {
@@ -122,6 +133,62 @@ export default function App() {
   useEffect(() => {
     loadAllData(true);
   }, [loadAllData]);
+
+  // Real-time Database Subscription for Orders Table (Supabase Realtime postgres_changes)
+  useEffect(() => {
+    const ordersChannel = supabase
+      .channel('realtime:orders')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'orders' },
+        (payload) => {
+          const newOrder = payload.new as Order;
+          if (!newOrder) return;
+
+          // 1. Prepend new order if not already in state
+          setOrders((prev) => {
+            if (prev.some((o) => o.id === newOrder.id)) return prev;
+            return [newOrder, ...prev];
+          });
+
+          // 2. Play audio alert chime (ding.mp3 sound synthesized via Web Audio)
+          playBeep('ding');
+
+          // 3. Show Web Notification if permitted
+          const title = `Pesanan Baru Masuk! (#ORD-${newOrder.id})`;
+          const body = `Pelanggan: ${newOrder.customer_name || 'Pelanggan'} - Total: ${formatRupiah(newOrder.total_amount)}`;
+          showOrderNotification(title, body, () => {
+            setActiveTab('pesanan');
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'orders' },
+        (payload) => {
+          const updatedOrder = payload.new as Order;
+          if (!updatedOrder) return;
+          setOrders((prev) =>
+            prev.map((o) => (o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o))
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'orders' },
+        (payload) => {
+          const oldOrder = payload.old as { id: number };
+          if (oldOrder?.id) {
+            setOrders((prev) => prev.filter((o) => o.id !== oldOrder.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ordersChannel);
+    };
+  }, []);
 
   const [cartCount, setCartCount] = useState<number>(0);
 
@@ -230,6 +297,8 @@ export default function App() {
                     const ords = await fetchOrders();
                     setOrders(ords);
                   }}
+                  notificationPermission={notifPermission}
+                  onRequestPermission={handleRequestPermission}
                 />
               )}
 
