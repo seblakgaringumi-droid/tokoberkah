@@ -43,7 +43,14 @@ function saveLocalProducts(products: Product[]) {
 function getLocalImageMap(): Record<string, string> {
   try {
     const raw = localStorage.getItem(PRODUCT_IMAGES_KEY);
-    return raw ? JSON.parse(raw) : {};
+    const map = raw ? JSON.parse(raw) : {};
+    // Clean out any expired blob URLs from cache
+    Object.keys(map).forEach((key) => {
+      if (typeof map[key] === 'string' && map[key].startsWith('blob:')) {
+        delete map[key];
+      }
+    });
+    return map;
   } catch {
     return {};
   }
@@ -52,7 +59,7 @@ function getLocalImageMap(): Record<string, string> {
 function saveLocalImage(id: string, url: string | null) {
   try {
     const map = getLocalImageMap();
-    if (url) {
+    if (url && !url.startsWith('blob:')) {
       map[id] = url;
     } else {
       delete map[id];
@@ -76,16 +83,28 @@ export async function fetchProducts(): Promise<Product[]> {
     if (error) {
       console.warn('Supabase fetch products returned error, using local cache:', error.message);
       const cached = getLocalProducts();
-      if (cached.length > 0) return cached;
+      if (cached.length > 0) {
+        return cached.map((p) => {
+          const rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
+          const validImg = rawImg && !rawImg.startsWith('blob:') ? rawImg : null;
+          return { ...p, image_url: validImg };
+        });
+      }
       return [];
     }
 
-    // Clean floating point artifacts and merge local image overrides
-    const processed = (data || []).map((p) => {
-      const customImg = localMap[p.id] || p.image_url || null;
+    // Clean floating point artifacts and resolve permanent database image
+    const processed: Product[] = (data || []).map((p: any) => {
+      // Prioritize database image_url or image column
+      const dbImg = p.image_url || p.image || null;
+      const cachedImg = localMap[p.id] || null;
+      const chosenImg = (dbImg && !dbImg.startsWith('blob:')) 
+        ? dbImg 
+        : (cachedImg && !cachedImg.startsWith('blob:') ? cachedImg : null);
+
       return {
         ...p,
-        image_url: customImg,
+        image_url: chosenImg,
         stock_kg: typeof p.stock_kg === 'number' ? roundStock(p.stock_kg) : p.stock_kg,
         min_stock: typeof p.min_stock === 'number' ? roundStock(p.min_stock) : p.min_stock,
       };
@@ -97,18 +116,24 @@ export async function fetchProducts(): Promise<Product[]> {
     console.warn('fetchProducts network/fetch exception, falling back to cache:', err);
     const cached = getLocalProducts();
     if (cached.length > 0) {
-      return cached.map((p) => ({
-        ...p,
-        image_url: localMap[p.id] || p.image_url || null,
-      }));
+      return cached.map((p) => {
+        const rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
+        const validImg = rawImg && !rawImg.startsWith('blob:') ? rawImg : null;
+        return {
+          ...p,
+          image_url: validImg,
+        };
+      });
     }
     return [];
   }
 }
 
 export async function createProduct(product: Omit<Product, 'id'>): Promise<Product> {
+  const cleanImageUrl = product.image_url && !product.image_url.startsWith('blob:') ? product.image_url : null;
   const cleanPayload = {
     ...product,
+    image_url: cleanImageUrl,
     stock_kg: roundStock(Number(product.stock_kg) || 0),
     min_stock: roundStock(Number(product.min_stock) || 0),
   };
@@ -117,11 +142,11 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
   const localProduct: Product = {
     id: tempId,
     ...cleanPayload,
-    image_url: cleanPayload.image_url || null,
+    image_url: cleanImageUrl,
   };
 
-  if (cleanPayload.image_url) {
-    saveLocalImage(tempId, cleanPayload.image_url);
+  if (cleanImageUrl) {
+    saveLocalImage(tempId, cleanImageUrl);
   }
 
   const localList = getLocalProducts();
@@ -136,26 +161,28 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
 
     if (error) {
       console.warn('Supabase insert note, checking column fallback:', error.message);
-      if (cleanPayload.image_url) {
-        const withoutImage = { ...cleanPayload };
-        delete (withoutImage as any).image_url;
+      if (cleanImageUrl) {
+        // Retry with 'image' column in case database table used 'image' instead of 'image_url'
+        const withAlternativeColumn = { ...cleanPayload, image: cleanImageUrl } as any;
+        delete withAlternativeColumn.image_url;
         const { data: retryData, error: retryError } = await supabase
           .from('products')
-          .insert([withoutImage])
+          .insert([withAlternativeColumn])
           .select()
           .single();
         if (!retryError && retryData) {
-          saveLocalImage(retryData.id, cleanPayload.image_url);
-          return { ...retryData, image_url: cleanPayload.image_url };
+          saveLocalImage(retryData.id, cleanImageUrl);
+          return { ...retryData, image_url: cleanImageUrl };
         }
       }
       return localProduct;
     }
 
-    if (cleanPayload.image_url) {
-      saveLocalImage(data.id, cleanPayload.image_url);
+    const finalImageUrl = data.image_url || (data as any).image || cleanImageUrl;
+    if (finalImageUrl) {
+      saveLocalImage(data.id, finalImageUrl);
     }
-    return { ...data, image_url: cleanPayload.image_url || data.image_url || null };
+    return { ...data, image_url: finalImageUrl };
   } catch (err) {
     console.warn('createProduct fetch exception, returned local product:', err);
     return localProduct;
@@ -171,8 +198,11 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
     cleanUpdates.min_stock = roundStock(Number(cleanUpdates.min_stock) || 0);
   }
 
-  // Update local image map if provided
+  // Ensure no blob: URL is sent
   if ('image_url' in cleanUpdates) {
+    if (cleanUpdates.image_url && cleanUpdates.image_url.startsWith('blob:')) {
+      cleanUpdates.image_url = null;
+    }
     saveLocalImage(id, cleanUpdates.image_url || null);
   }
 
@@ -197,27 +227,32 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
       .single();
 
     if (error) {
-      console.warn('Supabase update note, checking image_url column fallback:', error.message);
-      if (cleanUpdates.image_url) {
-        const withoutImage = { ...cleanUpdates };
-        delete withoutImage.image_url;
+      console.warn('Supabase update note, checking image column fallback:', error.message);
+      if ('image_url' in cleanUpdates) {
+        const withAlternativeColumn = { ...cleanUpdates, image: cleanUpdates.image_url } as any;
+        delete withAlternativeColumn.image_url;
         const { data: retryData, error: retryError } = await supabase
           .from('products')
-          .update(withoutImage)
+          .update(withAlternativeColumn)
           .eq('id', id)
           .select()
           .single();
         if (!retryError && retryData) {
-          return { ...retryData, image_url: cleanUpdates.image_url };
+          const finalImg = retryData.image_url || retryData.image || cleanUpdates.image_url || null;
+          saveLocalImage(id, finalImg);
+          return { ...retryData, image_url: finalImg };
         }
       }
       return updatedLocal;
     }
 
-    const localMap = getLocalImageMap();
+    const finalImg = data.image_url || (data as any).image || cleanUpdates.image_url || null;
+    if (finalImg) {
+      saveLocalImage(data.id, finalImg);
+    }
     return {
       ...data,
-      image_url: localMap[data.id] || data.image_url || cleanUpdates.image_url || null,
+      image_url: finalImg,
     };
   } catch (err) {
     console.warn('updateProduct fetch error, preserved in local cache:', err);
