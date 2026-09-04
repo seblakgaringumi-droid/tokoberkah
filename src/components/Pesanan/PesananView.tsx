@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { 
   ClipboardList, 
-  Phone, 
   MapPin, 
   Clock, 
   CheckCircle2, 
@@ -10,10 +9,13 @@ import {
   Search, 
   MessageSquare,
   Truck,
-  ExternalLink,
   ChevronDown,
   ChevronUp,
-  X
+  X,
+  Bell,
+  BellRing,
+  Send,
+  Volume2
 } from 'lucide-react';
 import { Order, Product } from '../../types';
 import { formatRupiah, formatDateTime, playBeep, formatStock, roundStock } from '../../lib/utils';
@@ -23,16 +25,21 @@ interface PesananViewProps {
   orders: Order[];
   products: Product[];
   onRefresh: () => Promise<void>;
+  notificationPermission?: NotificationPermission;
+  onRequestPermission?: () => void;
 }
 
 export const PesananView: React.FC<PesananViewProps> = ({
   orders,
   products,
   onRefresh,
+  notificationPermission = 'default',
+  onRequestPermission,
 }) => {
   const [selectedStatus, setSelectedStatus] = useState<string>('SEMUA');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
 
   // New order modal
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -68,24 +75,54 @@ export const PesananView: React.FC<PesananViewProps> = ({
   // Update status handler
   const handleUpdateStatus = async (orderId: number, nextStatus: 'PENDING' | 'PROCESSED' | 'COMPLETED' | 'CANCELLED') => {
     try {
+      setActionLoadingId(orderId);
       await updateOrderStatus(orderId, nextStatus);
-      playBeep('success');
+      if (nextStatus === 'PROCESSED' || nextStatus === 'COMPLETED') {
+        playBeep('success');
+      } else if (nextStatus === 'CANCELLED') {
+        playBeep('alert');
+      }
       await onRefresh();
     } catch (err: any) {
       alert(`Gagal memperbarui status pesanan: ${err.message}`);
+    } finally {
+      setActionLoadingId(null);
     }
   };
 
-  // WhatsApp click handler
-  const openWhatsApp = (phone: string, customerName: string, orderId: number, total: number) => {
-    let cleanPhone = phone.replace(/[^0-9]/g, '');
+  // WhatsApp click handler with detailed order items template
+  const openWhatsApp = (order: Order, customAction?: 'konfirmasi' | 'proses' | 'siap') => {
+    let cleanPhone = order.customer_phone.replace(/[^0-9]/g, '');
     if (cleanPhone.startsWith('0')) {
       cleanPhone = '62' + cleanPhone.slice(1);
     }
-    const message = encodeURIComponent(
-      `Halo Kak ${customerName}, kami dari Toko Berkah. Menghubungi mengenai Pesanan #${orderId} senilai ${formatRupiah(total)}. Apakah ada catatan pengiriman tambahan? Terima kasih!`
-    );
-    window.open(`https://wa.me/${cleanPhone}?text=${message}`, '_blank');
+
+    const items = Array.isArray(order.items_json) ? order.items_json : [];
+    const itemsListText = items
+      .map((it: any, i: number) => `${i + 1}. ${it.name} (${formatStock(it.qty, it.unit || '')}) - ${formatRupiah(it.subtotal || it.price * it.qty)}`)
+      .join('\n');
+
+    let intro = `Halo Kak *${order.customer_name}*, terima kasih telah memesan di *Toko Berkah*!\n\n`;
+    intro += `📋 *Rincian Pesanan #ORD-${order.id}:*\n${itemsListText}\n\n`;
+    intro += `💰 *Total Tagihan:* ${formatRupiah(order.total_amount)}\n`;
+    intro += `💳 *Pembayaran:* ${order.payment_method}\n`;
+    intro += `📍 *Alamat Pengantaran:* ${order.delivery_address}\n\n`;
+
+    if (customAction === 'proses') {
+      intro += `🛵 *Status:* Pesanan Kakak sedang kami *Siapkan & Proses* untuk segera diantar ya! Mohon ditunggu.`;
+    } else if (customAction === 'siap') {
+      intro += `✅ *Status:* Pesanan Kakak sudah selesai disiapkan dan sedang dalam perjalanan pengantaran. Terima kasih!`;
+    } else {
+      intro += `Mohon konfirmasinya ya Kak apakah pesanan dan alamat di atas sudah sesuai? Terima kasih! 🙏`;
+    }
+
+    const encoded = encodeURIComponent(intro);
+    window.open(`https://wa.me/${cleanPhone}?text=${encoded}`, '_blank');
+  };
+
+  // Test sound alert
+  const handleTestSound = () => {
+    playBeep('ding');
   };
 
   // Add Item to new order modal
@@ -163,10 +200,61 @@ export const PesananView: React.FC<PesananViewProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+      {/* Realtime & Notification Status Card */}
+      <div className="bg-gradient-to-r from-emerald-800 to-[#1B5E20] rounded-2xl p-4 sm:p-5 text-white shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center shrink-0">
+            <BellRing className="w-5 h-5 text-amber-300 animate-bounce" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="font-bold text-base sm:text-lg">Real-time Pesanan Online Aktif</h3>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-400/20 border border-emerald-300/30 text-emerald-100">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-ping" />
+                Live Channel
+              </span>
+            </div>
+            <p className="text-xs text-emerald-100/80 mt-0.5">
+              Pesanan baru dari pelanggan otomatis masuk seketika dengan alarm suara lonceng & notifikasi push browser.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 self-stretch md:self-auto justify-end">
+          <button
+            type="button"
+            onClick={handleTestSound}
+            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold text-white flex items-center gap-1.5 transition-colors border border-white/20 cursor-pointer"
+            title="Uji coba suara lonceng pesanan"
+          >
+            <Volume2 className="w-3.5 h-3.5 text-amber-300" />
+            <span>Tes Alarm</span>
+          </button>
+
+          {notificationPermission !== 'granted' && onRequestPermission && (
+            <button
+              type="button"
+              onClick={onRequestPermission}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-gray-900 text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+            >
+              <Bell className="w-3.5 h-3.5" />
+              <span>Aktifkan Notifikasi Desktop</span>
+            </button>
+          )}
+
+          {notificationPermission === 'granted' && (
+            <span className="px-3 py-1.5 rounded-xl bg-emerald-900/60 border border-emerald-400/40 text-[11px] font-semibold text-emerald-200 flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              Notifikasi Siap
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* Top Bar Summary & Filter Tabs */}
       <div className="flex flex-col md:flex-row gap-3 items-center justify-between">
-        {/* Status Filter Tabs (Clean Minimalism Pill Container) */}
+        {/* Status Filter Tabs */}
         <div className="flex gap-1.5 p-1.5 bg-white border border-gray-200/80 rounded-full shadow-xs overflow-x-auto w-full md:w-auto">
           {[
             { id: 'SEMUA', label: 'Semua Pesanan', count: orders.length },
@@ -179,7 +267,7 @@ export const PesananView: React.FC<PesananViewProps> = ({
               <button
                 key={tab.id}
                 onClick={() => setSelectedStatus(tab.id)}
-                className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap flex items-center gap-2 transition-all ${
+                className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap flex items-center gap-2 transition-all cursor-pointer ${
                   isSelected
                     ? 'bg-[#2E7D32] text-white shadow-xs'
                     : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
@@ -218,7 +306,7 @@ export const PesananView: React.FC<PesananViewProps> = ({
                 setOrderItems([{ productId: products[0].id, qty: 1 }]);
               }
             }}
-            className="px-4 py-2.5 rounded-full bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 shrink-0 shadow-xs transition-colors active:scale-[0.98]"
+            className="px-4 py-2.5 rounded-full bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 shrink-0 shadow-xs transition-colors active:scale-[0.98] cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span className="hidden sm:inline">Tambah Pesanan</span>
@@ -235,7 +323,7 @@ export const PesananView: React.FC<PesananViewProps> = ({
           <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">
             {searchQuery
               ? `Tidak ditemukan pesanan dengan kata kunci "${searchQuery}".`
-              : 'Belum ada pesanan masuk dalam status ini. Pesanan dari pelanggan akan muncul di sini.'}
+              : 'Belum ada pesanan masuk dalam status ini. Pesanan dari pelanggan akan otomatis muncul di sini secara real-time.'}
           </p>
         </div>
       ) : (
@@ -243,22 +331,29 @@ export const PesananView: React.FC<PesananViewProps> = ({
           {filteredOrders.map((order) => {
             const isExpanded = expandedOrderId === order.id;
             const items = Array.isArray(order.items_json) ? order.items_json : [];
+            const isLoadingThis = actionLoadingId === order.id;
 
             return (
               <div
                 key={order.id}
-                className="bg-white rounded-2xl border border-gray-200 shadow-xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
+                className={`bg-white rounded-2xl border transition-all overflow-hidden flex flex-col justify-between ${
+                  order.status === 'PENDING'
+                    ? 'border-amber-300 ring-2 ring-amber-100 shadow-sm'
+                    : 'border-gray-200 shadow-xs hover:shadow-md'
+                }`}
               >
                 {/* Header */}
-                <div className="p-4 bg-gray-50/70 border-b border-gray-200 flex items-center justify-between">
+                <div className={`p-4 border-b flex items-center justify-between ${
+                  order.status === 'PENDING' ? 'bg-amber-50/80 border-amber-200' : 'bg-gray-50/70 border-gray-200'
+                }`}>
                   <div className="flex items-center gap-2">
-                    <span className="font-mono font-bold text-sm text-gray-800">
+                    <span className="font-mono font-bold text-sm text-gray-900">
                       #ORD-{order.id}
                     </span>
                     <span
                       className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
                         order.status === 'PENDING'
-                          ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                          ? 'bg-amber-500 text-white shadow-2xs animate-pulse'
                           : order.status === 'PROCESSED'
                           ? 'bg-blue-100 text-blue-800 border border-blue-200'
                           : order.status === 'COMPLETED'
@@ -286,16 +381,15 @@ export const PesananView: React.FC<PesananViewProps> = ({
                 <div className="p-4 space-y-3 text-sm">
                   <div>
                     <h4 className="font-bold text-gray-900 text-base">{order.customer_name}</h4>
-                    <div className="flex items-center gap-3 text-xs text-gray-600 mt-1">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600 mt-1">
                       <button
-                        onClick={() => openWhatsApp(order.customer_phone, order.customer_name, order.id, order.total_amount)}
-                        className="inline-flex items-center gap-1 text-[#2E7D32] hover:text-[#1B5E20] font-semibold hover:underline"
-                        title="Chat via WhatsApp"
+                        onClick={() => openWhatsApp(order)}
+                        className="inline-flex items-center gap-1 text-[#2E7D32] hover:text-[#1B5E20] font-semibold hover:underline bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 cursor-pointer"
+                        title="Chat via WhatsApp dengan rincian pesanan"
                       >
-                        <MessageSquare className="w-3.5 h-3.5" />
-                        <span>{order.customer_phone} (WA)</span>
+                        <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>{order.customer_phone}</span>
                       </button>
-                      <span className="text-gray-300">|</span>
                       <span className="font-medium bg-gray-100 px-2 py-0.5 rounded text-gray-700">
                         {order.payment_method}
                       </span>
@@ -312,7 +406,7 @@ export const PesananView: React.FC<PesananViewProps> = ({
                   <div className="pt-2 border-t border-gray-100">
                     <button
                       onClick={() => setExpandedOrderId(isExpanded ? null : order.id)}
-                      className="w-full flex items-center justify-between text-xs text-gray-600 font-semibold hover:text-gray-900 py-1"
+                      className="w-full flex items-center justify-between text-xs text-gray-600 font-semibold hover:text-gray-900 py-1 cursor-pointer"
                     >
                       <span>
                         Daftar Belanja ({items.length} item)
@@ -321,14 +415,14 @@ export const PesananView: React.FC<PesananViewProps> = ({
                     </button>
 
                     {isExpanded && (
-                      <div className="mt-2 space-y-1.5 p-2 bg-emerald-50/50 rounded-xl text-xs divide-y divide-gray-100">
+                      <div className="mt-2 space-y-1.5 p-2.5 bg-emerald-50/50 rounded-xl text-xs divide-y divide-emerald-100/60 border border-emerald-100/50">
                         {items.length === 0 ? (
                           <p className="text-gray-400 italic">Tidak ada rincian item.</p>
                         ) : (
                           items.map((it: any, idx: number) => (
                             <div key={idx} className="flex justify-between items-center py-1 first:pt-0">
-                              <span className="text-gray-800">
-                                {it.name} <span className="text-gray-500">x{formatStock(it.qty, it.unit || '')}</span>
+                              <span className="text-gray-800 font-medium">
+                                {it.name} <span className="text-gray-500 font-normal">x{formatStock(it.qty, it.unit || '')}</span>
                               </span>
                               <span className="font-semibold text-gray-900">
                                 {formatRupiah(it.subtotal || it.price * it.qty)}
@@ -349,42 +443,65 @@ export const PesananView: React.FC<PesananViewProps> = ({
                   </div>
                 </div>
 
-                {/* Actions Bar */}
-                <div className="p-3 bg-gray-50 border-t border-gray-200 flex items-center justify-end gap-2">
-                  {order.status === 'PENDING' && (
-                    <>
-                      <button
-                        onClick={() => handleUpdateStatus(order.id, 'CANCELLED')}
-                        className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-xs font-medium hover:bg-gray-100 transition-colors"
-                      >
-                        Batalkan
-                      </button>
-                      <button
-                        onClick={() => handleUpdateStatus(order.id, 'PROCESSED')}
-                        className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5"
-                      >
-                        <Truck className="w-3.5 h-3.5" />
-                        <span>Proses Pesanan</span>
-                      </button>
-                    </>
-                  )}
+                {/* Actions Bar with Quick Actions */}
+                <div className="p-3 bg-gray-50/90 border-t border-gray-200 flex flex-wrap items-center justify-between gap-2">
+                  {/* WhatsApp Quick Button */}
+                  <button
+                    onClick={() => openWhatsApp(order)}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Kirim detail pesanan ke WhatsApp pelanggan"
+                  >
+                    <Send className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Kirim WA</span>
+                  </button>
 
-                  {order.status === 'PROCESSED' && (
-                    <button
-                      onClick={() => handleUpdateStatus(order.id, 'COMPLETED')}
-                      className="px-4 py-1.5 rounded-lg bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Selesaikan & Antar</span>
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2 ml-auto">
+                    {order.status === 'PENDING' && (
+                      <>
+                        <button
+                          disabled={isLoadingThis}
+                          onClick={() => handleUpdateStatus(order.id, 'CANCELLED')}
+                          className="px-3 py-1.5 rounded-lg border border-gray-300 text-rose-600 hover:bg-rose-50 hover:border-rose-300 text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                        >
+                          Tolak / Batalkan
+                        </button>
+                        <button
+                          disabled={isLoadingThis}
+                          onClick={() => handleUpdateStatus(order.id, 'PROCESSED')}
+                          className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 active:scale-95 disabled:opacity-50 cursor-pointer"
+                          title="Terima pesanan, kurangi stok otomatis, dan ubah status ke Diproses"
+                        >
+                          <Truck className="w-3.5 h-3.5" />
+                          <span>{isLoadingThis ? 'Memproses...' : 'Terima & Proses'}</span>
+                        </button>
+                      </>
+                    )}
 
-                  {order.status === 'COMPLETED' && (
-                    <span className="text-xs text-emerald-700 font-medium flex items-center gap-1">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      <span>Pesanan Telah Selesai</span>
-                    </span>
-                  )}
+                    {order.status === 'PROCESSED' && (
+                      <button
+                        disabled={isLoadingThis}
+                        onClick={() => handleUpdateStatus(order.id, 'COMPLETED')}
+                        className="px-4 py-1.5 rounded-lg bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 active:scale-95 disabled:opacity-50 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>{isLoadingThis ? 'Menyimpan...' : 'Selesaikan & Antar'}</span>
+                      </button>
+                    )}
+
+                    {order.status === 'COMPLETED' && (
+                      <span className="text-xs text-emerald-700 font-semibold flex items-center gap-1 py-1 px-2 bg-emerald-50 rounded-lg">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>Pesanan Selesai</span>
+                      </span>
+                    )}
+
+                    {order.status === 'CANCELLED' && (
+                      <span className="text-xs text-gray-500 font-semibold flex items-center gap-1 py-1 px-2 bg-gray-100 rounded-lg">
+                        <XCircle className="w-4 h-4 text-gray-400" />
+                        <span>Pesanan Dibatalkan</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -400,7 +517,7 @@ export const PesananView: React.FC<PesananViewProps> = ({
               <h3 className="font-bold text-lg">Catat Pesanan Pelanggan Baru</h3>
               <button
                 onClick={() => setIsAddModalOpen(false)}
-                className="p-1 text-white/80 hover:text-white rounded-lg hover:bg-white/10"
+                className="p-1 text-white/80 hover:text-white rounded-lg hover:bg-white/10 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -448,90 +565,109 @@ export const PesananView: React.FC<PesananViewProps> = ({
                   </label>
                   <select
                     value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value as any)}
-                    className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:border-[#2E7D32] outline-none"
+                    onChange={(e) => setPaymentMethod(e.target.value as 'COD' | 'TRANSFER')}
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:border-[#2E7D32] outline-none bg-white"
                   >
                     <option value="COD">COD (Bayar di Tempat)</option>
-                    <option value="TRANSFER">Transfer Bank</option>
+                    <option value="TRANSFER">Transfer Bank / QRIS</option>
                   </select>
                 </div>
               </div>
 
               <div>
                 <label className="block text-gray-700 font-semibold mb-1">
-                  Alamat Pengiriman / Patokan <span className="text-rose-500">*</span>
+                  Alamat Pengiriman <span className="text-rose-500">*</span>
                 </label>
                 <textarea
                   required
                   rows={2}
-                  placeholder="Jl. Melati No. 12 RT 04/02 (Depan Masjid)"
+                  placeholder="Contoh: Jl. Mawar No. 12 RT 03/04 (Pagar Hitam)"
                   value={deliveryAddress}
                   onChange={(e) => setDeliveryAddress(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:border-[#2E7D32] outline-none resize-none"
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:border-[#2E7D32] outline-none"
                 />
               </div>
 
-              {/* Order Items Selection */}
-              <div>
+              {/* Items in order */}
+              <div className="border-t border-gray-100 pt-3">
                 <div className="flex items-center justify-between mb-2">
-                  <label className="text-gray-700 font-semibold">Daftar Barang Belanja</label>
+                  <label className="text-gray-700 font-semibold">
+                    Daftar Produk Belanjaan <span className="text-rose-500">*</span>
+                  </label>
                   <button
                     type="button"
                     onClick={handleAddItemToNewOrder}
-                    className="text-xs text-[#2E7D32] font-bold hover:underline"
+                    className="text-xs text-[#2E7D32] hover:text-[#1B5E20] font-bold flex items-center gap-1 cursor-pointer"
                   >
-                    + Tambah Produk
+                    <Plus className="w-3.5 h-3.5" />
+                    Tambah Barang
                   </button>
                 </div>
 
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {orderItems.map((item, idx) => (
-                    <div key={idx} className="flex gap-2 items-center bg-gray-50 p-2 rounded-xl border border-gray-200">
-                      <select
-                        value={item.productId}
-                        onChange={(e) => handleUpdateItemInNewOrder(idx, e.target.value, item.qty)}
-                        className="flex-1 px-2 py-1.5 rounded-lg border border-gray-300 bg-white text-xs outline-none"
-                      >
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name} ({formatRupiah(p.selling_price)}/{p.unit})
-                          </option>
-                        ))}
-                      </select>
+                {orderItems.length === 0 ? (
+                  <p className="text-gray-400 text-xs italic py-2">Belum ada barang dipilih.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {orderItems.map((it, idx) => {
+                      const selectedProd = products.find((p) => p.id === it.productId);
+                      return (
+                        <div key={idx} className="flex items-center gap-2 bg-gray-50 p-2 rounded-xl">
+                          <select
+                            value={it.productId}
+                            onChange={(e) => handleUpdateItemInNewOrder(idx, e.target.value, it.qty)}
+                            className="flex-1 px-2 py-1.5 rounded-lg border border-gray-300 text-xs bg-white outline-none"
+                          >
+                            {products.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name} ({formatRupiah(p.selling_price)}/{p.unit || 'kg'})
+                              </option>
+                            ))}
+                          </select>
 
-                      <input
-                        type="number"
-                        min="0.1"
-                        step="any"
-                        value={item.qty}
-                        onChange={(e) => handleUpdateItemInNewOrder(idx, item.productId, parseFloat(e.target.value) || 1)}
-                        className="w-16 px-2 py-1.5 rounded-lg border border-gray-300 text-xs text-center font-semibold"
-                      />
+                          <div className="flex items-center gap-1 w-24">
+                            <input
+                              type="number"
+                              step="any"
+                              min="0.01"
+                              value={it.qty}
+                              onChange={(e) => handleUpdateItemInNewOrder(idx, it.productId, parseFloat(e.target.value) || 0)}
+                              className="w-full px-2 py-1.5 rounded-lg border border-gray-300 text-xs text-center outline-none"
+                            />
+                            <span className="text-gray-500 text-[11px] shrink-0">
+                              {selectedProd?.unit || 'kg'}
+                            </span>
+                          </div>
 
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveItemInNewOrder(idx)}
-                        className="p-1.5 text-rose-500 hover:text-rose-700"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                          <span className="text-xs font-semibold text-gray-800 w-24 text-right">
+                            {formatRupiah((selectedProd?.selling_price || 0) * it.qty)}
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItemInNewOrder(idx)}
+                            className="text-gray-400 hover:text-rose-500 p-1 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
-              <div className="p-4 bg-gray-50 border-t border-gray-200 -mx-5 -mb-5 flex gap-2 justify-end">
+              <div className="border-t border-gray-200 pt-4 flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-100 font-medium"
+                  className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 font-semibold text-xs hover:bg-gray-50 cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white font-bold transition-all shadow-sm"
+                  className="px-5 py-2 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white font-semibold text-xs shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   {isSubmitting ? 'Menyimpan...' : 'Simpan Pesanan'}
                 </button>
