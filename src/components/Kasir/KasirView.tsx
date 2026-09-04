@@ -16,7 +16,10 @@ import {
   Check,
   Percent,
   Coins,
-  Scale
+  Scale,
+  Edit3,
+  RotateCcw,
+  CheckCheck
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Product, CartItem, Sale, SaleItem, StoreProfile } from '../../types';
@@ -27,13 +30,14 @@ import { ReceiptModal } from '../ReceiptModal';
 // Helper for quick quantity presets based on product measurement unit
 const getQuickPresets = (unit?: string) => {
   const u = (unit || '').toLowerCase().trim();
-  if (u === 'kg' || u === 'kilogram' || u === '') {
+  if (u === 'kg' || u === 'kilogram' || u === '' || u === 'ons') {
     return [
       { label: '1 kg', qty: 1 },
       { label: '0.5 kg (Setengah)', qty: 0.5 },
       { label: '0.25 kg (Saparapat)', qty: 0.25 },
       { label: '0.1 kg (1 Ons)', qty: 0.1 },
       { label: '2 kg', qty: 2 },
+      { label: '5 kg', qty: 5 },
     ];
   }
   if (u === 'liter' || u === 'ltr' || u === 'l') {
@@ -42,6 +46,7 @@ const getQuickPresets = (unit?: string) => {
       { label: '0.5 L (Setengah)', qty: 0.5 },
       { label: '0.25 L (1/4 L)', qty: 0.25 },
       { label: '2 Liter', qty: 2 },
+      { label: '5 Liter', qty: 5 },
     ];
   }
   if (u === 'gram' || u === 'gr' || u === 'g') {
@@ -50,11 +55,14 @@ const getQuickPresets = (unit?: string) => {
       { label: '500g (Setengah)', qty: 500 },
       { label: '250g (Saparapat)', qty: 250 },
       { label: '100g (1 Ons)', qty: 100 },
+      { label: '2000g (2 kg)', qty: 2000 },
+      { label: '5000g (5 kg)', qty: 5000 },
     ];
   }
   return [
     { label: '1', qty: 1 },
     { label: '0.5 (Setengah)', qty: 0.5 },
+    { label: '0.25 (1/4)', qty: 0.25 },
     { label: '2', qty: 2 },
     { label: '5', qty: 5 },
     { label: '10', qty: 10 },
@@ -87,6 +95,15 @@ export const KasirView: React.FC<KasirViewProps> = ({
   // Quick custom quantity selector modal state
   const [quickQtyModalProduct, setQuickQtyModalProduct] = useState<Product | null>(null);
   const [customQtyInput, setCustomQtyInput] = useState<string>('1');
+  const [modalInputMode, setModalInputMode] = useState<'kg' | 'gram'>('kg');
+  const [modalGramInput, setModalGramInput] = useState<string>('1000');
+
+  // Inline Gram & Editable Subtotal states per Cart Item
+  const [activeGramItemId, setActiveGramItemId] = useState<string | null>(null);
+  const [gramInputMap, setGramInputMap] = useState<Record<string, string>>({});
+
+  const [editingSubtotalItemId, setEditingSubtotalItemId] = useState<string | null>(null);
+  const [subtotalInputMap, setSubtotalInputMap] = useState<Record<string, string>>({});
 
   // Clear cart confirmation dialog state
   const [isClearCartConfirmOpen, setIsClearCartConfirmOpen] = useState(false);
@@ -160,27 +177,42 @@ export const KasirView: React.FC<KasirViewProps> = ({
   }, [cart]);
 
   // Add product to cart
-  const addToCart = (product: Product, deltaQty = 1) => {
+  const addToCart = (product: Product, deltaQty = 1, customSubtotal?: number | null) => {
     playBeep('beep');
     setCart((prev) => {
       const existing = prev.find((item) => item.product.id === product.id);
       if (existing) {
         const newQty = Math.max(0.001, roundStock(existing.qty + deltaQty));
-        const newSubtotal = Math.round(newQty * product.selling_price);
+        const newSubtotal =
+          customSubtotal !== undefined && customSubtotal !== null
+            ? customSubtotal
+            : Math.round(newQty * product.selling_price);
         return prev.map((item) =>
           item.product.id === product.id
-            ? { ...item, qty: newQty, subtotal: newSubtotal }
+            ? {
+                ...item,
+                qty: newQty,
+                custom_gram: roundStock(newQty * 1000),
+                subtotal: newSubtotal,
+                custom_subtotal: customSubtotal !== undefined ? customSubtotal : null,
+              }
             : item
         );
       } else {
         const initialQty = deltaQty > 0 ? roundStock(deltaQty) : 1;
+        const initialSubtotal =
+          customSubtotal !== undefined && customSubtotal !== null
+            ? customSubtotal
+            : Math.round(initialQty * product.selling_price);
         return [
           ...prev,
           {
             product,
             qty: initialQty,
             unit: product.unit || 'kg',
-            subtotal: Math.round(initialQty * product.selling_price),
+            custom_gram: roundStock(initialQty * 1000),
+            subtotal: initialSubtotal,
+            custom_subtotal: customSubtotal !== undefined ? customSubtotal : null,
           },
         ];
       }
@@ -188,7 +220,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
   };
 
   // Update specific item quantity
-  const updateItemQty = (productId: string, newQty: number) => {
+  const updateItemQty = (productId: string, newQty: number, preserveCustomSubtotal = false) => {
     if (newQty <= 0) {
       removeFromCart(productId);
       return;
@@ -197,10 +229,16 @@ export const KasirView: React.FC<KasirViewProps> = ({
       prev.map((item) => {
         if (item.product.id === productId) {
           const qty = roundStock(newQty);
+          const subtotal =
+            preserveCustomSubtotal && item.custom_subtotal !== null && item.custom_subtotal !== undefined
+              ? item.custom_subtotal
+              : Math.round(qty * item.product.selling_price);
           return {
             ...item,
             qty,
-            subtotal: Math.round(qty * item.product.selling_price),
+            custom_gram: roundStock(qty * 1000),
+            subtotal,
+            custom_subtotal: preserveCustomSubtotal ? item.custom_subtotal : null,
           };
         }
         return item;
@@ -208,9 +246,105 @@ export const KasirView: React.FC<KasirViewProps> = ({
     );
   };
 
+  // Custom Gram input handler for an item
+  const handleGramInputChange = (productId: string, val: string) => {
+    setGramInputMap((prev) => ({ ...prev, [productId]: val }));
+    const parsedGram = parseFloat(val);
+    if (!isNaN(parsedGram) && parsedGram > 0) {
+      const newKg = roundStock(parsedGram / 1000);
+      setCart((prev) =>
+        prev.map((item) => {
+          if (item.product.id === productId) {
+            const subtotal =
+              item.custom_subtotal !== null && item.custom_subtotal !== undefined
+                ? item.custom_subtotal
+                : Math.round(newKg * item.product.selling_price);
+            return {
+              ...item,
+              qty: newKg,
+              custom_gram: parsedGram,
+              subtotal,
+            };
+          }
+          return item;
+        })
+      );
+    }
+  };
+
+  // Set preset gram directly
+  const handleSetGramPreset = (productId: string, gram: number) => {
+    setGramInputMap((prev) => ({ ...prev, [productId]: String(gram) }));
+    const newKg = roundStock(gram / 1000);
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.product.id === productId) {
+          const subtotal =
+            item.custom_subtotal !== null && item.custom_subtotal !== undefined
+              ? item.custom_subtotal
+              : Math.round(newKg * item.product.selling_price);
+          return {
+            ...item,
+            qty: newKg,
+            custom_gram: gram,
+            subtotal,
+          };
+        }
+        return item;
+      })
+    );
+  };
+
+  // Start editing item subtotal
+  const handleStartEditSubtotal = (productId: string, currentSubtotal: number) => {
+    setEditingSubtotalItemId(productId);
+    setSubtotalInputMap((prev) => ({ ...prev, [productId]: String(currentSubtotal) }));
+  };
+
+  // Save manual subtotal
+  const handleSaveSubtotal = (productId: string) => {
+    const rawVal = subtotalInputMap[productId];
+    const parsed = parseFloat(rawVal ? rawVal.replace(/[^\d]/g, '') : '');
+    if (!isNaN(parsed) && parsed >= 0) {
+      setCart((prev) =>
+        prev.map((item) => {
+          if (item.product.id === productId) {
+            return {
+              ...item,
+              subtotal: Math.round(parsed),
+              custom_subtotal: Math.round(parsed),
+            };
+          }
+          return item;
+        })
+      );
+    }
+    setEditingSubtotalItemId(null);
+  };
+
+  // Reset custom subtotal back to standard formula (qty * price)
+  const handleResetSubtotal = (productId: string) => {
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.product.id === productId) {
+          const standard = Math.round(item.qty * item.product.selling_price);
+          return {
+            ...item,
+            subtotal: standard,
+            custom_subtotal: null,
+          };
+        }
+        return item;
+      })
+    );
+    setEditingSubtotalItemId(null);
+  };
+
   // Remove item from cart
   const removeFromCart = (productId: string) => {
     setCart((prev) => prev.filter((item) => item.product.id !== productId));
+    setActiveGramItemId((prev) => (prev === productId ? null : prev));
+    setEditingSubtotalItemId((prev) => (prev === productId ? null : prev));
   };
 
   // Trigger Clear cart confirmation
@@ -651,9 +785,15 @@ export const KasirView: React.FC<KasirViewProps> = ({
                 cart.map((item) => {
                   const presets = getQuickPresets(item.unit || item.product.unit);
                   const currentAlias = getWeightAlias(item.qty, item.unit || item.product.unit);
+                  const isKgUnit = (item.unit || item.product.unit || 'kg').toLowerCase().includes('kg');
+                  const isEditingSubtotal = editingSubtotalItemId === item.product.id;
+                  const isGramOpen = activeGramItemId === item.product.id;
+                  const hasCustomSubtotal = item.custom_subtotal !== null && item.custom_subtotal !== undefined;
+                  const standardSubtotal = Math.round(item.qty * item.product.selling_price);
 
                   return (
                     <div key={item.product.id} className="pt-3.5 first:pt-0 group">
+                      {/* Product details & Stepper */}
                       <div className="flex justify-between items-start gap-2">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -665,15 +805,43 @@ export const KasirView: React.FC<KasirViewProps> = ({
                                 {currentAlias}
                               </span>
                             )}
+                            {hasCustomSubtotal && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded border border-amber-200 flex items-center gap-0.5">
+                                <Edit3 className="w-2.5 h-2.5" /> Nego/Kustom
+                              </span>
+                            )}
                           </div>
-                          <div className="flex items-center gap-1.5 text-xs text-gray-500 font-mono mt-0.5">
+                          <div className="flex items-center gap-1.5 text-xs text-gray-500 font-mono mt-0.5 flex-wrap">
                             <span>{formatRupiah(item.product.selling_price)}</span>
                             <span>x</span>
                             <span className="text-gray-800 font-semibold">
-                              {formatStock(item.qty, item.unit || item.product.unit)}
+                              {item.qty < 1 && isKgUnit
+                                ? `${roundStock(item.qty * 1000)} gr (${item.qty} kg)`
+                                : formatStock(item.qty, item.unit || item.product.unit)}
                             </span>
                             <span className="text-gray-300">•</span>
-                            <span className="text-[#2E7D32] font-bold">{formatRupiah(item.subtotal)}</span>
+                            {hasCustomSubtotal ? (
+                              <div className="inline-flex items-center gap-1">
+                                <span className="line-through text-gray-400 text-[11px]">
+                                  {formatRupiah(standardSubtotal)}
+                                </span>
+                                <span
+                                  onClick={() => handleStartEditSubtotal(item.product.id, item.subtotal)}
+                                  className="text-[#2E7D32] font-bold cursor-pointer hover:underline"
+                                  title="Klik untuk edit subtotal"
+                                >
+                                  {formatRupiah(item.subtotal)}
+                                </span>
+                              </div>
+                            ) : (
+                              <span
+                                onClick={() => handleStartEditSubtotal(item.product.id, item.subtotal)}
+                                className="text-[#2E7D32] font-bold cursor-pointer hover:underline"
+                                title="Klik untuk edit subtotal / harga nego"
+                              >
+                                {formatRupiah(item.subtotal)}
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -683,7 +851,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             type="button"
                             onClick={() => {
                               const step = item.qty <= 0.25 ? 0.05 : item.qty <= 1 ? 0.25 : 1;
-                              updateItemQty(item.product.id, roundStock(item.qty - step));
+                              updateItemQty(item.product.id, roundStock(item.qty - step), true);
                             }}
                             className="w-7 h-7 border border-gray-200 rounded-lg flex items-center justify-center text-xs font-bold text-gray-600 hover:bg-gray-100 active:scale-95 transition-all cursor-pointer"
                             title="Kurangi kuantitas"
@@ -698,9 +866,9 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             onChange={(e) => {
                               const val = parseFloat(e.target.value);
                               if (!isNaN(val)) {
-                                updateItemQty(item.product.id, val);
+                                updateItemQty(item.product.id, val, true);
                               } else if (e.target.value === '') {
-                                updateItemQty(item.product.id, 0);
+                                updateItemQty(item.product.id, 0, true);
                               }
                             }}
                             className="w-14 text-center text-xs font-bold py-1 px-1 border border-gray-200 rounded-lg outline-none focus:border-[#2E7D32] focus:ring-1 focus:ring-[#2E7D32] bg-gray-50 hover:bg-white transition-colors font-mono text-gray-900"
@@ -710,7 +878,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             type="button"
                             onClick={() => {
                               const step = item.qty < 1 ? 0.25 : 1;
-                              updateItemQty(item.product.id, roundStock(item.qty + step));
+                              updateItemQty(item.product.id, roundStock(item.qty + step), true);
                             }}
                             className="w-7 h-7 border border-gray-200 rounded-lg flex items-center justify-center text-xs font-bold text-gray-600 hover:bg-gray-100 active:scale-95 transition-all cursor-pointer"
                             title="Tambah kuantitas"
@@ -728,7 +896,130 @@ export const KasirView: React.FC<KasirViewProps> = ({
                         </div>
                       </div>
 
-                      {/* Quick Quantity Shortcut Badges */}
+                      {/* Inline Subtotal Editor (Harga Nego / Pembulatan) */}
+                      {isEditingSubtotal && (
+                        <div className="mt-2 p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl space-y-1.5 animate-in fade-in duration-150">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-amber-900 flex items-center gap-1">
+                              <Edit3 className="w-3 h-3 text-amber-700" /> Edit Subtotal / Harga Nego:
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setEditingSubtotalItemId(null)}
+                              className="text-[10px] text-gray-500 hover:text-gray-800 font-medium cursor-pointer"
+                            >
+                              Tutup
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="relative flex-1">
+                              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs">
+                                Rp
+                              </span>
+                              <input
+                                type="number"
+                                step="500"
+                                min="0"
+                                value={subtotalInputMap[item.product.id] ?? String(item.subtotal)}
+                                onChange={(e) =>
+                                  setSubtotalInputMap((prev) => ({
+                                    ...prev,
+                                    [item.product.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder={String(item.subtotal)}
+                                className="w-full pl-8 pr-2 py-1 text-xs font-bold font-mono rounded-lg border border-amber-300 bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 text-gray-900"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleSaveSubtotal(item.product.id);
+                                }}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveSubtotal(item.product.id)}
+                              className="px-2.5 py-1 text-xs font-bold bg-[#2E7D32] hover:bg-[#1B5E20] text-white rounded-lg transition-colors cursor-pointer shadow-2xs"
+                            >
+                              Simpan
+                            </button>
+                            {hasCustomSubtotal && (
+                              <button
+                                type="button"
+                                onClick={() => handleResetSubtotal(item.product.id)}
+                                className="px-2 py-1 text-[11px] font-medium text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors cursor-pointer flex items-center gap-0.5"
+                                title="Reset ke kalkulasi normal (qty x harga)"
+                              >
+                                <RotateCcw className="w-2.5 h-2.5" />
+                                <span>Reset</span>
+                              </button>
+                            )}
+                          </div>
+                          <div className="flex justify-between items-center text-[10px] text-amber-800/80">
+                            <span>Harga Normal: {formatRupiah(standardSubtotal)}</span>
+                            <span>Hanya berlaku di transaksi ini</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Inline Gram Input (Custom Qty berbasis Gram) */}
+                      {isGramOpen && (
+                        <div className="mt-2 p-2.5 bg-emerald-50/90 border border-emerald-200 rounded-xl space-y-1.5 animate-in fade-in duration-150">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-[#1B5E20] flex items-center gap-1">
+                              <Scale className="w-3 h-3 text-[#2E7D32]" /> Input Gram (Konversi Otomatis ke Kg):
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setActiveGramItemId(null)}
+                              className="text-[10px] text-gray-500 hover:text-gray-800 font-medium cursor-pointer"
+                            >
+                              Tutup
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="relative flex-1">
+                              <input
+                                type="number"
+                                step="10"
+                                min="1"
+                                value={
+                                  gramInputMap[item.product.id] ?? String(roundStock(item.qty * 1000))
+                                }
+                                onChange={(e) => handleGramInputChange(item.product.id, e.target.value)}
+                                placeholder="Contoh: 150, 250, 800"
+                                className="w-full px-2.5 py-1 text-xs font-bold font-mono rounded-lg border border-emerald-300 bg-white focus:outline-none focus:ring-1 focus:ring-[#2E7D32] text-gray-900 pr-12"
+                                autoFocus
+                              />
+                              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-[10px]">
+                                gram
+                              </span>
+                            </div>
+                            <span className="text-xs font-bold text-[#2E7D32] font-mono px-1 whitespace-nowrap">
+                              = {item.qty} kg
+                            </span>
+                          </div>
+                          {/* Quick Gram Presets */}
+                          <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                            <span className="text-[9px] text-emerald-800 font-semibold">Pilihan Gram:</span>
+                            {[100, 150, 200, 250, 500, 750, 800].map((gr) => (
+                              <button
+                                key={gr}
+                                type="button"
+                                onClick={() => handleSetGramPreset(item.product.id, gr)}
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium border transition-colors cursor-pointer ${
+                                  roundStock(item.qty * 1000) === gr
+                                    ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
+                                    : 'bg-white hover:bg-emerald-100 text-emerald-900 border-emerald-200'
+                                }`}
+                              >
+                                {gr}g
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Quick Quantity Shortcut Badges + Tool Buttons */}
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                         <span className="text-[10px] text-gray-400 font-medium">Pintas:</span>
                         {presets.map((preset) => {
@@ -748,6 +1039,52 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             </button>
                           );
                         })}
+
+                        {/* Input Gram Toggle Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (activeGramItemId === item.product.id) {
+                              setActiveGramItemId(null);
+                            } else {
+                              setActiveGramItemId(item.product.id);
+                              setGramInputMap((prev) => ({
+                                ...prev,
+                                [item.product.id]: String(roundStock(item.qty * 1000)),
+                              }));
+                            }
+                          }}
+                          className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer active:scale-95 border flex items-center gap-0.5 ${
+                            isGramOpen
+                              ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
+                              : 'bg-emerald-50 hover:bg-emerald-100 text-[#2E7D32] border-emerald-300'
+                          }`}
+                          title="Input kuantitas dalam satuan Gram"
+                        >
+                          <Scale className="w-2.5 h-2.5" />
+                          <span>Input Gram</span>
+                        </button>
+
+                        {/* Editable Subtotal Toggle Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isEditingSubtotal) {
+                              setEditingSubtotalItemId(null);
+                            } else {
+                              handleStartEditSubtotal(item.product.id, item.subtotal);
+                            }
+                          }}
+                          className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer active:scale-95 border flex items-center gap-0.5 ${
+                            hasCustomSubtotal
+                              ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border-amber-300 font-bold'
+                              : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
+                          }`}
+                          title="Ubah Subtotal secara manual (Harga Nego / Pembulatan)"
+                        >
+                          <Edit3 className="w-2.5 h-2.5" />
+                          <span>{hasCustomSubtotal ? 'Edit Nego' : 'Nego/Subtotal'}</span>
+                        </button>
                       </div>
                     </div>
                   );
@@ -1025,9 +1362,14 @@ export const KasirView: React.FC<KasirViewProps> = ({
                 cart.map((item) => {
                   const presets = getQuickPresets(item.unit || item.product.unit);
                   const currentAlias = getWeightAlias(item.qty, item.unit || item.product.unit);
+                  const isKgUnit = (item.unit || item.product.unit || 'kg').toLowerCase().includes('kg');
+                  const isEditingSubtotal = editingSubtotalItemId === item.product.id;
+                  const isGramOpen = activeGramItemId === item.product.id;
+                  const hasCustomSubtotal = item.custom_subtotal !== null && item.custom_subtotal !== undefined;
+                  const standardSubtotal = Math.round(item.qty * item.product.selling_price);
 
                   return (
-                    <div key={item.product.id} className="pt-3 first:pt-0">
+                    <div key={item.product.id} className="pt-3.5 first:pt-0">
                       <div className="flex justify-between items-start mb-1">
                         <div>
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1039,15 +1381,44 @@ export const KasirView: React.FC<KasirViewProps> = ({
                                 {currentAlias}
                               </span>
                             )}
+                            {hasCustomSubtotal && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded border border-amber-200 flex items-center gap-0.5">
+                                <Edit3 className="w-2.5 h-2.5" /> Nego
+                              </span>
+                            )}
                           </div>
-                          <p className="text-xs text-gray-500 font-mono mt-0.5">
-                            {formatRupiah(item.product.selling_price)} x {formatStock(item.qty, item.unit || item.product.unit)}
-                          </p>
+                          <div className="flex items-center gap-1.5 text-xs text-gray-500 font-mono mt-0.5 flex-wrap">
+                            <span>{formatRupiah(item.product.selling_price)}</span>
+                            <span>x</span>
+                            <span className="text-gray-800 font-semibold">
+                              {item.qty < 1 && isKgUnit
+                                ? `${roundStock(item.qty * 1000)} gr (${item.qty} kg)`
+                                : formatStock(item.qty, item.unit || item.product.unit)}
+                            </span>
+                            <span className="text-gray-300">•</span>
+                            {hasCustomSubtotal ? (
+                              <div className="inline-flex items-center gap-1">
+                                <span className="line-through text-gray-400 text-[10px]">
+                                  {formatRupiah(standardSubtotal)}
+                                </span>
+                                <span
+                                  onClick={() => handleStartEditSubtotal(item.product.id, item.subtotal)}
+                                  className="text-[#2E7D32] font-bold"
+                                >
+                                  {formatRupiah(item.subtotal)}
+                                </span>
+                              </div>
+                            ) : (
+                              <span
+                                onClick={() => handleStartEditSubtotal(item.product.id, item.subtotal)}
+                                className="text-[#2E7D32] font-bold"
+                              >
+                                {formatRupiah(item.subtotal)}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="text-right">
-                          <span className="font-bold text-gray-900 text-sm block">
-                            {formatRupiah(item.subtotal)}
-                          </span>
                           <button
                             onClick={() => removeFromCart(item.product.id)}
                             className="text-rose-600 p-1 hover:bg-rose-50 rounded-lg inline-flex items-center gap-1 text-[11px]"
@@ -1058,13 +1429,14 @@ export const KasirView: React.FC<KasirViewProps> = ({
                         </div>
                       </div>
 
+                      {/* Stepper + Quick Action Buttons */}
                       <div className="flex items-center justify-between gap-2 mt-2">
                         <div className="flex items-center border border-gray-200 rounded-lg bg-gray-50">
                           <button
                             type="button"
                             onClick={() => {
                               const step = item.qty <= 0.25 ? 0.05 : item.qty <= 1 ? 0.25 : 1;
-                              updateItemQty(item.product.id, roundStock(item.qty - step));
+                              updateItemQty(item.product.id, roundStock(item.qty - step), true);
                             }}
                             className="px-2.5 py-1.5 text-gray-700"
                           >
@@ -1078,9 +1450,9 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             onChange={(e) => {
                               const val = parseFloat(e.target.value);
                               if (!isNaN(val)) {
-                                updateItemQty(item.product.id, val);
+                                updateItemQty(item.product.id, val, true);
                               } else if (e.target.value === '') {
-                                updateItemQty(item.product.id, 0);
+                                updateItemQty(item.product.id, 0, true);
                               }
                             }}
                             className="w-14 text-center text-xs font-bold py-1 outline-none bg-transparent font-mono"
@@ -1089,7 +1461,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             type="button"
                             onClick={() => {
                               const step = item.qty < 1 ? 0.25 : 1;
-                              updateItemQty(item.product.id, roundStock(item.qty + step));
+                              updateItemQty(item.product.id, roundStock(item.qty + step), true);
                             }}
                             className="px-2.5 py-1.5 text-gray-700"
                           >
@@ -1097,26 +1469,182 @@ export const KasirView: React.FC<KasirViewProps> = ({
                           </button>
                         </div>
 
-                        {/* Mobile Quick Presets */}
-                        <div className="flex items-center gap-1 overflow-x-auto py-1">
-                          {presets.slice(0, 3).map((preset) => {
-                            const isSelected = roundStock(item.qty) === roundStock(preset.qty);
-                            return (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (activeGramItemId === item.product.id) {
+                                setActiveGramItemId(null);
+                              } else {
+                                setActiveGramItemId(item.product.id);
+                                setGramInputMap((prev) => ({
+                                  ...prev,
+                                  [item.product.id]: String(roundStock(item.qty * 1000)),
+                                }));
+                              }
+                            }}
+                            className={`text-[11px] px-2 py-1 rounded-lg font-semibold border flex items-center gap-0.5 ${
+                              isGramOpen
+                                ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
+                                : 'bg-emerald-50 text-[#2E7D32] border-emerald-300'
+                            }`}
+                          >
+                            <Scale className="w-3 h-3" />
+                            <span>Gram</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isEditingSubtotal) {
+                                setEditingSubtotalItemId(null);
+                              } else {
+                                handleStartEditSubtotal(item.product.id, item.subtotal);
+                              }
+                            }}
+                            className={`text-[11px] px-2 py-1 rounded-lg font-semibold border flex items-center gap-0.5 ${
+                              hasCustomSubtotal
+                                ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold'
+                                : 'bg-gray-100 text-gray-700 border-gray-300'
+                            }`}
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>{hasCustomSubtotal ? 'Nego' : 'Harga'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Mobile Inline Subtotal Editor */}
+                      {isEditingSubtotal && (
+                        <div className="mt-2 p-2.5 bg-amber-50 rounded-xl border border-amber-200 space-y-1.5 animate-in fade-in duration-150">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-amber-900 flex items-center gap-1">
+                              <Edit3 className="w-3 h-3 text-amber-700" /> Edit Subtotal / Harga Nego:
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setEditingSubtotalItemId(null)}
+                              className="text-[10px] text-gray-500 hover:text-gray-800"
+                            >
+                              Tutup
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="relative flex-1">
+                              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs">
+                                Rp
+                              </span>
+                              <input
+                                type="number"
+                                step="500"
+                                min="0"
+                                value={subtotalInputMap[item.product.id] ?? String(item.subtotal)}
+                                onChange={(e) =>
+                                  setSubtotalInputMap((prev) => ({
+                                    ...prev,
+                                    [item.product.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder={String(item.subtotal)}
+                                className="w-full pl-8 pr-2 py-1 text-xs font-bold font-mono rounded-lg border border-amber-300 bg-white focus:outline-none text-gray-900"
+                                autoFocus
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveSubtotal(item.product.id)}
+                              className="px-2.5 py-1 text-xs font-bold bg-[#2E7D32] text-white rounded-lg"
+                            >
+                              Simpan
+                            </button>
+                            {hasCustomSubtotal && (
                               <button
-                                key={preset.label}
                                 type="button"
-                                onClick={() => updateItemQty(item.product.id, preset.qty)}
-                                className={`text-[10px] px-2 py-1 rounded-md font-semibold whitespace-nowrap transition-all border ${
-                                  isSelected
-                                    ? 'bg-[#2E7D32] text-white border-[#2E7D32] font-bold'
-                                    : 'bg-emerald-50/70 text-emerald-900 border-emerald-200'
+                                onClick={() => handleResetSubtotal(item.product.id)}
+                                className="px-2 py-1 text-[11px] font-medium text-amber-800 bg-amber-100 border border-amber-300 rounded-lg flex items-center gap-0.5"
+                              >
+                                <RotateCcw className="w-2.5 h-2.5" />
+                                <span>Reset</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Mobile Inline Gram Input */}
+                      {isGramOpen && (
+                        <div className="mt-2 p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 space-y-1.5 animate-in fade-in duration-150">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-[#1B5E20] flex items-center gap-1">
+                              <Scale className="w-3 h-3 text-[#2E7D32]" /> Input Gram (Otomatis ke Kg):
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setActiveGramItemId(null)}
+                              className="text-[10px] text-gray-500 hover:text-gray-800"
+                            >
+                              Tutup
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="relative flex-1">
+                              <input
+                                type="number"
+                                step="10"
+                                min="1"
+                                value={
+                                  gramInputMap[item.product.id] ?? String(roundStock(item.qty * 1000))
+                                }
+                                onChange={(e) => handleGramInputChange(item.product.id, e.target.value)}
+                                placeholder="Contoh: 150, 250, 800"
+                                className="w-full px-2.5 py-1 text-xs font-bold font-mono rounded-lg border border-emerald-300 bg-white focus:outline-none text-gray-900 pr-12"
+                                autoFocus
+                              />
+                              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-[10px]">
+                                gram
+                              </span>
+                            </div>
+                            <span className="text-xs font-bold text-[#2E7D32] font-mono px-1 whitespace-nowrap">
+                              = {item.qty} kg
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                            {[100, 150, 200, 250, 500, 750, 800].map((gr) => (
+                              <button
+                                key={gr}
+                                type="button"
+                                onClick={() => handleSetGramPreset(item.product.id, gr)}
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium border transition-colors ${
+                                  roundStock(item.qty * 1000) === gr
+                                    ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
+                                    : 'bg-white text-emerald-900 border-emerald-200'
                                 }`}
                               >
-                                {preset.label}
+                                {gr}g
                               </button>
-                            );
-                          })}
+                            ))}
+                          </div>
                         </div>
+                      )}
+
+                      {/* Mobile Quick Presets */}
+                      <div className="flex items-center gap-1 overflow-x-auto py-1 mt-1 scrollbar-none">
+                        {presets.map((preset) => {
+                          const isSelected = roundStock(item.qty) === roundStock(preset.qty);
+                          return (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() => updateItemQty(item.product.id, preset.qty)}
+                              className={`text-[10px] px-2 py-1 rounded-md font-semibold whitespace-nowrap transition-all border ${
+                                isSelected
+                                  ? 'bg-[#2E7D32] text-white border-[#2E7D32] font-bold'
+                                  : 'bg-emerald-50/70 text-emerald-900 border-emerald-200'
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   );
