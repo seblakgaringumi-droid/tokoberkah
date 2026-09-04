@@ -6,12 +6,14 @@ interface ProductImageUploaderProps {
   value: string | null;
   onChange: (url: string | null) => void;
   disabled?: boolean;
+  productId?: string;
 }
 
 export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
   value,
   onChange,
   disabled = false,
+  productId,
 }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -24,7 +26,7 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      setUploadError('Hanya file gambar (JPG, PNG, WebP, GIF) yang didukung.');
+      setUploadError('Hanya file gambar (JPG, PNG, WebP) yang didukung.');
       return;
     }
 
@@ -36,11 +38,11 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
     try {
       setIsUploading(true);
       setUploadError(null);
-      const uploadedUrl = await uploadProductImage(file);
+      const uploadedUrl = await uploadProductImage(file, productId);
       onChange(uploadedUrl);
     } catch (err: any) {
       console.error('Upload image error:', err);
-      setUploadError(err.message || 'Gagal memproses gambar produk');
+      setUploadError(err.message || 'Gagal mengunggah foto ke storage.');
     } finally {
       setIsUploading(false);
     }
