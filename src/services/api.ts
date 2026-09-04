@@ -706,45 +706,187 @@ export async function fetchOrders(): Promise<Order[]> {
   return data || [];
 }
 
-export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PROCESSED' | 'COMPLETED' | 'CANCELLED'): Promise<Order> {
-  // If moving from PENDING to PROCESSED, deduct stock for products in items_json
-  if (status === 'PROCESSED') {
+export async function processOnlineSaleToReports(order: Order): Promise<Sale | null> {
+  try {
+    const orderIdStr = `#ORD-${order.id}`;
+    const paymentMethodUpper = (order.payment_method || 'COD').toUpperCase();
+    const isCash = paymentMethodUpper.includes('COD') || paymentMethodUpper.includes('TUNAI') || paymentMethodUpper === 'CASH';
+    const finalPaymentMethod = isCash ? 'CASH' : (paymentMethodUpper.includes('QRIS') ? 'QRIS' : 'TRANSFER');
+
+    // Parse items safely with fallbacks
+    const rawItems = Array.isArray(order.items_json) ? order.items_json : [];
+    const localProducts = getLocalProducts();
+    const productMap: Record<string, Product> = {};
+    localProducts.forEach(p => { productMap[p.id] = p; });
+
+    const tempSaleId = `sale_online_${order.id}_${Date.now()}`;
+
+    const constructedItems: SaleItem[] = rawItems.map((item: any, idx: number) => {
+      const prodId = item.product_id || item.productId || item.id || `prod_${idx}`;
+      const foundProd = productMap[prodId] || {
+        id: String(prodId),
+        name: item.product_name || item.name || item.title || 'Produk',
+        category: 'Umum',
+        cost_price: Number(item.cost_price) || (Number(item.price) || 0) * 0.8,
+        selling_price: Number(item.price) || 0,
+        stock_kg: 100,
+        min_stock: 10,
+        is_active: true,
+        image_url: null,
+        unit: item.unit || item.satuan || 'pcs',
+        barcode: null
+      };
+
+      const qty = Number(item.qty || item.quantity || item.amount || 1);
+      const subtotal = Number(item.subtotal || (Number(item.price || 0) * qty) || 0);
+
+      return {
+        id: `item_online_${Date.now()}_${idx}`,
+        sale_id: tempSaleId,
+        product_id: String(prodId),
+        qty_kg: qty,
+        subtotal: subtotal,
+        cost_price: Number(foundProd.cost_price) || (Number(item.price || 0) * 0.8),
+        original_qty: qty,
+        unit: item.unit || item.satuan || foundProd.unit || 'pcs',
+        custom_subtotal: subtotal,
+        product: foundProd
+      };
+    });
+
+    const localSale: Sale = {
+      id: tempSaleId,
+      total_amount: Number(order.total_amount) || 0,
+      payment_method: finalPaymentMethod,
+      status: 'COMPLETED',
+      created_at: new Date().toISOString(),
+      notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'} (${order.delivery_address || ''})`,
+      items: constructedItems,
+      sale_items: constructedItems,
+      cash_received: isCash ? Number(order.total_amount) : 0,
+      change_amount: 0,
+      customer_name: order.customer_name,
+      customer_phone: order.customer_phone
+    };
+
+    // Save to local cache first
+    const cachedSales = getLocalSales();
+    const existingIndex = cachedSales.findIndex(s => s.notes?.includes(orderIdStr) || s.id === tempSaleId);
+    if (existingIndex >= 0) {
+      cachedSales[existingIndex] = localSale;
+      saveLocalSales([...cachedSales]);
+    } else {
+      saveLocalSales([localSale, ...cachedSales]);
+    }
+
+    // Try inserting into Supabase sales table
     try {
-      const { data: currentOrder } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', orderId)
+      const { data: saleData, error: saleError } = await supabase
+        .from('sales')
+        .insert([{
+          total_amount: Number(order.total_amount) || 0,
+          payment_method: finalPaymentMethod,
+          status: 'COMPLETED',
+          notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'} (${order.delivery_address || ''})`,
+          created_at: new Date().toISOString()
+        }])
+        .select()
         .single();
 
-      if (currentOrder && currentOrder.status === 'PENDING' && currentOrder.items_json) {
-        const items = Array.isArray(currentOrder.items_json) ? currentOrder.items_json : [];
-        for (const item of items) {
-          const prodId = item.product_id || item.productId;
-          const qty = Number(item.qty) || 0;
-          if (prodId && qty > 0) {
-            try {
-              const { data: prodData } = await supabase
-                .from('products')
-                .select('id, stock_kg, name')
-                .eq('id', prodId)
-                .single();
+      if (!saleError && saleData) {
+        const saleId = saleData.id;
+        // Insert sale_items
+        if (constructedItems.length > 0) {
+          const itemsPayload = constructedItems.map(it => ({
+            sale_id: saleId,
+            product_id: it.product_id,
+            qty_kg: it.qty_kg,
+            subtotal: it.subtotal,
+            cost_price: it.cost_price || 0,
+            original_qty: it.original_qty || it.qty_kg,
+            unit: it.unit || 'pcs',
+            custom_subtotal: it.custom_subtotal || it.subtotal
+          }));
 
-              if (prodData) {
-                const currentStock = Number(prodData.stock_kg) || 0;
-                const newStock = roundStock(Math.max(0, currentStock - qty));
-                await supabase
-                  .from('products')
-                  .update({ stock_kg: newStock })
-                  .eq('id', prodId);
-              }
-            } catch (stockDeductErr) {
-              console.warn(`Could not deduct stock for product ${prodId}:`, stockDeductErr);
+          await supabase.from('sale_items').insert(itemsPayload);
+        }
+
+        const fullSale: Sale = {
+          ...saleData,
+          items: constructedItems,
+          sale_items: constructedItems,
+          customer_name: order.customer_name,
+          customer_phone: order.customer_phone
+        };
+
+        const updatedSales = getLocalSales().map(s => s.id === tempSaleId ? fullSale : s);
+        saveLocalSales(updatedSales);
+        return fullSale;
+      }
+    } catch (dbErr) {
+      console.warn('Supabase insert online sale error, preserved in local cache:', dbErr);
+    }
+
+    return localSale;
+  } catch (err) {
+    console.error('Error processing online sale to reports:', err);
+    return null;
+  }
+}
+
+export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PROCESSED' | 'COMPLETED' | 'CANCELLED'): Promise<Order> {
+  // 1. Fetch current order to check state
+  let currentOrder: Order | null = null;
+  try {
+    const { data } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+    currentOrder = data;
+  } catch (fetchErr) {
+    console.warn('Error reading order before update:', fetchErr);
+  }
+
+  // 2. If moving from PENDING to PROCESSED, deduct stock for products in items_json
+  if (status === 'PROCESSED' && currentOrder && currentOrder.status === 'PENDING' && currentOrder.items_json) {
+    try {
+      const items = Array.isArray(currentOrder.items_json) ? currentOrder.items_json : [];
+      for (const item of items) {
+        const prodId = item.product_id || item.productId || item.id;
+        const qty = Number(item.qty || item.quantity || item.amount) || 0;
+        if (prodId && qty > 0) {
+          try {
+            const { data: prodData } = await supabase
+              .from('products')
+              .select('id, stock_kg, name')
+              .eq('id', prodId)
+              .single();
+
+            if (prodData) {
+              const currentStock = Number(prodData.stock_kg) || 0;
+              const newStock = roundStock(Math.max(0, currentStock - qty));
+              await supabase
+                .from('products')
+                .update({ stock_kg: newStock })
+                .eq('id', prodId);
             }
+          } catch (stockDeductErr) {
+            console.warn(`Could not deduct stock for product ${prodId}:`, stockDeductErr);
           }
         }
       }
     } catch (orderCheckErr) {
       console.warn('Error reading order for stock deduction:', orderCheckErr);
+    }
+  }
+
+  // 3. If completing the order (COMPLETED), record to Sales & Reports
+  if (status === 'COMPLETED' && currentOrder && currentOrder.status !== 'COMPLETED') {
+    try {
+      await processOnlineSaleToReports(currentOrder);
+    } catch (reportErr) {
+      console.warn('Could not record online order to sales report:', reportErr);
     }
   }
 
