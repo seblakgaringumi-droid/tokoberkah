@@ -46,6 +46,8 @@ export interface CartItem {
   qty: number;
   unit: string;
   subtotal: number;
+  custom_subtotal?: number | null;
+  custom_gram?: number | null;
 }
 
 export interface Expense {
