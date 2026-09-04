@@ -1,7 +1,8 @@
 import React from 'react';
-import { Database, AlertTriangle, RefreshCw, Store, Settings } from 'lucide-react';
+import { Database, AlertTriangle, RefreshCw, Settings } from 'lucide-react';
 import { StoreWallet, StoreProfile } from '../types';
 import { formatRupiah } from '../lib/utils';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface HeaderProps {
   dbConnected: boolean;
@@ -54,8 +55,11 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Right controls: Wallet, Stock Alert, Store Settings Button, Live DB Status, & Cashier Avatar */}
+      {/* Right controls: PWA Install, Wallet, Stock Alert, Store Settings Button, Live DB Status, & Cashier Avatar */}
       <div className="flex items-center space-x-2 sm:space-x-3">
+        {/* PWA Install Button / Desktop Mode Badge */}
+        <PWAInstallButton />
+
         {/* Store Profile & Receipt Settings Trigger Button */}
         {onOpenStoreSettings && (
           <button
