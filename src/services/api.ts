@@ -16,11 +16,11 @@ const STORE_PROFILE_CACHE_KEY = 'pos_store_profile_cache';
 export const DEFAULT_STORE_PROFILE: StoreProfile = {
   store_name: 'TOKO BERKAH',
   tagline: 'Sembako, Bumbu, & Kebutuhan Harian',
-  address: 'Jl. Berkah Raya No. 88, Sejahtera',
-  phone: '0812-3456-7890',
-  footer_message: 'Terima kasih atas kunjungan Anda!',
-  footer_policy: 'Barang yang sudah dibeli dapat ditukar jika ada kerusakan dalam 1x24 jam.',
-  footer_quote: '*** BERKAH SELALU ***',
+  address: 'Jl. Kapalanunggal I, Sindangkasih, Ciamis',
+  phone: '0852-9499-6696',
+  footer_message: 'Jazakumullah khairan, terima kasih banyak sudah berbelanja di Toko Sembako Berkah.',
+  footer_policy: 'Semoga belanjaan ini membawa keberkahan dan kesehatan untuk seluruh keluarga di rumah, serta rezeki Kakak dilipatgandakan dan dimudahkan selalu. Aamiin Yaa Robbal Aalamiin',
+  footer_quote: '*** BARAKALLAAHU FIIKUM ***',
 };
 
 function getLocalProducts(): Product[] {
