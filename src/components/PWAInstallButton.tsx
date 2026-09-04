@@ -17,7 +17,7 @@ export function usePWAInstall() {
   const [showIOSModal, setShowIOSModal] = useState<boolean>(false);
 
   useEffect(() => {
-    // Check if running in standalone mode (desktop PWA / home screen app)
+    // 1. Check standalone mode (desktop PWA / mobile app)
     const checkStandalone = () => {
       const isStandaloneMode =
         window.matchMedia('(display-mode: standalone)').matches ||
@@ -39,12 +39,12 @@ export function usePWAInstall() {
     };
     mediaQuery.addEventListener?.('change', handleMediaChange);
 
-    // Detect iOS device
+    // 2. Detect iOS
     const userAgent = window.navigator.userAgent.toLowerCase();
     const isIOSDevice = /iphone|ipad|ipod/.test(userAgent) && !(window as unknown as { MSStream?: unknown }).MSStream;
     setIsIOS(isIOSDevice);
 
-    // Listen for browser install prompt (Chrome, Edge, Brave, Android)
+    // 3. Listen for browser install prompt
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
