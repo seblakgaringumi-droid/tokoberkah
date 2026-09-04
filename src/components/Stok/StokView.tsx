@@ -633,6 +633,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh }) => {
                 value={formData.image_url}
                 onChange={(url) => setFormData({ ...formData, image_url: url })}
                 disabled={isSubmitting}
+                productId={editingProduct?.id}
               />
 
               <div>
