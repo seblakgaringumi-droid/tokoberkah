@@ -92,21 +92,29 @@ export const PesananView: React.FC<PesananViewProps> = ({
 
   // WhatsApp click handler with detailed order items template
   const openWhatsApp = (order: Order, customAction?: 'konfirmasi' | 'proses' | 'siap') => {
-    let cleanPhone = order.customer_phone.replace(/[^0-9]/g, '');
+    let cleanPhone = (order.customer_phone || '').replace(/[^0-9]/g, '');
     if (cleanPhone.startsWith('0')) {
       cleanPhone = '62' + cleanPhone.slice(1);
     }
 
     const items = Array.isArray(order.items_json) ? order.items_json : [];
-    const itemsListText = items
-      .map((it: any, i: number) => `${i + 1}. ${it.name} (${formatStock(it.qty, it.unit || '')}) - ${formatRupiah(it.subtotal || it.price * it.qty)}`)
-      .join('\n');
+    const itemsListText = items.length > 0
+      ? items.map((item: any, index: number) => {
+          const name = item.product_name || item.name || item.title || 'Produk';
+          const qty = item.qty || item.quantity || item.amount || 1;
+          const unit = item.unit || item.satuan || 'Pcs';
+          const subtotal = item.subtotal || (item.price * qty) || 0;
+          return `${index + 1}. ${name} (${qty} ${unit}) - Rp ${Number(subtotal).toLocaleString('id-ID')}`;
+        }).join('\n')
+      : '- Belanjaan Toko';
 
-    let intro = `Halo Kak *${order.customer_name}*, terima kasih telah memesan di *Toko Berkah*!\n\n`;
-    intro += `📋 *Rincian Pesanan #ORD-${order.id}:*\n${itemsListText}\n\n`;
+    const orderNumber = `#ORD-${order.id}`;
+
+    let intro = `Halo Kak *${order.customer_name || 'Pelanggan'}*, terima kasih telah memesan di *Toko Berkah*!\n\n`;
+    intro += `📋 *Rincian Pesanan ${orderNumber}:*\n${itemsListText}\n\n`;
     intro += `💰 *Total Tagihan:* ${formatRupiah(order.total_amount)}\n`;
-    intro += `💳 *Pembayaran:* ${order.payment_method}\n`;
-    intro += `📍 *Alamat Pengantaran:* ${order.delivery_address}\n\n`;
+    intro += `💳 *Pembayaran:* ${order.payment_method || 'COD'}\n`;
+    intro += `📍 *Alamat Pengantaran:* ${order.delivery_address || '-'}\n\n`;
 
     if (customAction === 'proses') {
       intro += `🛵 *Status:* Pesanan Kakak sedang kami *Siapkan & Proses* untuk segera diantar ya! Mohon ditunggu.`;
@@ -419,16 +427,22 @@ export const PesananView: React.FC<PesananViewProps> = ({
                         {items.length === 0 ? (
                           <p className="text-gray-400 italic">Tidak ada rincian item.</p>
                         ) : (
-                          items.map((it: any, idx: number) => (
-                            <div key={idx} className="flex justify-between items-center py-1 first:pt-0">
-                              <span className="text-gray-800 font-medium">
-                                {it.name} <span className="text-gray-500 font-normal">x{formatStock(it.qty, it.unit || '')}</span>
-                              </span>
-                              <span className="font-semibold text-gray-900">
-                                {formatRupiah(it.subtotal || it.price * it.qty)}
-                              </span>
-                            </div>
-                          ))
+                          items.map((it: any, idx: number) => {
+                            const name = it.product_name || it.name || it.title || 'Produk';
+                            const qty = it.qty || it.quantity || it.amount || 1;
+                            const unit = it.unit || it.satuan || 'pcs';
+                            const subtotal = it.subtotal || (it.price * qty) || 0;
+                            return (
+                              <div key={idx} className="flex justify-between items-center py-1 first:pt-0">
+                                <span className="text-gray-800 font-medium">
+                                  {name} <span className="text-gray-500 font-normal">x{formatStock(qty, unit)}</span>
+                                </span>
+                                <span className="font-semibold text-gray-900">
+                                  {formatRupiah(subtotal)}
+                                </span>
+                              </div>
+                            );
+                          })
                         )}
                       </div>
                     )}
