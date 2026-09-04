@@ -106,7 +106,7 @@ export function formatStockWithAlias(val: number | string | null | undefined, un
   return cleanStock;
 }
 
-export function playBeep(type: 'beep' | 'success' | 'alert' = 'beep') {
+export function playBeep(type: 'beep' | 'success' | 'alert' | 'ding' = 'beep') {
   try {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
@@ -123,6 +123,23 @@ export function playBeep(type: 'beep' | 'success' | 'alert' = 'beep') {
       gain.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + 0.1);
+    } else if (type === 'ding') {
+      // Pleasant dual-tone bell chime for online orders (e.g. 1046.5Hz C6 -> 1318.5Hz E6 with gentle decay)
+      const playChimeNote = (freq: number, delay: number, dur: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + delay);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + delay);
+        osc.stop(ctx.currentTime + delay + dur);
+      };
+      playChimeNote(1046.5, 0, 0.4);      // C6
+      playChimeNote(1318.5, 0.12, 0.8);   // E6
+      playChimeNote(1567.98, 0.24, 1.0);  // G6
     } else if (type === 'success') {
       const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
       notes.forEach((freq, idx) => {
@@ -153,3 +170,48 @@ export function playBeep(type: 'beep' | 'success' | 'alert' = 'beep') {
     // Ignore audio permission errors
   }
 }
+
+/**
+ * Request notification permission from browser
+ */
+export async function requestNotificationPermission(): Promise<NotificationPermission> {
+  if (!('Notification' in window)) {
+    return 'denied';
+  }
+  if (Notification.permission === 'granted') {
+    return 'granted';
+  }
+  try {
+    const permission = await Notification.requestPermission();
+    return permission;
+  } catch (e) {
+    return 'denied';
+  }
+}
+
+/**
+ * Trigger web push / desktop notification for new orders
+ */
+export function showOrderNotification(title: string, body: string, onClick?: () => void) {
+  try {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      const notif = new Notification(title, {
+        body,
+        icon: '/icon.svg',
+        badge: '/icon.svg',
+        tag: 'order-alert-' + Date.now(),
+      });
+      if (onClick) {
+        notif.onclick = () => {
+          window.focus();
+          onClick();
+          notif.close();
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Could not display notification:', err);
+  }
+}
+
