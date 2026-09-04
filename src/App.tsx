@@ -294,8 +294,14 @@ export default function App() {
                   orders={orders}
                   products={products}
                   onRefresh={async () => {
-                    const ords = await fetchOrders();
+                    const [ords, prods, s] = await Promise.all([
+                      fetchOrders(),
+                      fetchProducts(),
+                      fetchSales(),
+                    ]);
                     setOrders(ords);
+                    setProducts(prods);
+                    setSales(s);
                   }}
                   notificationPermission={notifPermission}
                   onRequestPermission={handleRequestPermission}
@@ -355,4 +361,4 @@ export default function App() {
       />
     </div>
   );
-} 
+}
