@@ -51,7 +51,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       label: 'Pesanan',
       icon: ClipboardList,
       badge: pendingOrdersCount > 0 ? pendingOrdersCount : null,
-      badgeColor: 'bg-sky-400 text-gray-900',
+      badgeColor: 'bg-amber-400 text-gray-900 font-extrabold animate-pulse',
     },
     {
       id: 'utang' as ActiveTab,
