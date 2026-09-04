@@ -509,6 +509,9 @@ export const KasirView: React.FC<KasirViewProps> = ({
                           alt={product.name}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                           referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
                         />
                       ) : (
                         <div className="flex flex-col items-center justify-center text-gray-400 group-hover:text-[#2E7D32] transition-colors">
