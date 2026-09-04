@@ -1,6 +1,103 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Download, MonitorCheck, Share, PlusSquare, X } from 'lucide-react';
-import { usePWAInstall } from '../lib/usePWAInstall';
+
+interface BeforeInstallPromptEvent extends Event {
+  readonly platforms: string[];
+  readonly userChoice: Promise<{
+    outcome: 'accepted' | 'dismissed';
+    platform: string;
+  }>;
+  prompt(): Promise<void>;
+}
+
+export function usePWAInstall() {
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstalled, setIsInstalled] = useState<boolean>(false);
+  const [isIOS, setIsIOS] = useState<boolean>(false);
+  const [showIOSModal, setShowIOSModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    // Check if running in standalone mode (desktop PWA / home screen app)
+    const checkStandalone = () => {
+      const isStandaloneMode =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: window-controls-overlay)').matches ||
+        (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+        document.referrer.includes('android-app://');
+
+      setIsInstalled(Boolean(isStandaloneMode));
+    };
+
+    checkStandalone();
+
+    const mediaQuery = window.matchMedia('(display-mode: standalone)');
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      if (e.matches) {
+        setIsInstalled(true);
+        setDeferredPrompt(null);
+      }
+    };
+    mediaQuery.addEventListener?.('change', handleMediaChange);
+
+    // Detect iOS device
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    const isIOSDevice = /iphone|ipad|ipod/.test(userAgent) && !(window as unknown as { MSStream?: unknown }).MSStream;
+    setIsIOS(isIOSDevice);
+
+    // Listen for browser install prompt (Chrome, Edge, Brave, Android)
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+      mediaQuery.removeEventListener?.('change', handleMediaChange);
+    };
+  }, []);
+
+  const installPWA = useCallback(async (): Promise<boolean> => {
+    if (deferredPrompt) {
+      try {
+        await deferredPrompt.prompt();
+        const choiceResult = await deferredPrompt.userChoice;
+        if (choiceResult.outcome === 'accepted') {
+          setIsInstalled(true);
+          setDeferredPrompt(null);
+          return true;
+        } else {
+          return false;
+        }
+      } catch (err) {
+        console.error('[PWA] Error during install prompt:', err);
+        return false;
+      }
+    } else if (isIOS) {
+      setShowIOSModal(true);
+      return false;
+    }
+    return false;
+  }, [deferredPrompt, isIOS]);
+
+  return {
+    isInstalled,
+    canInstall: !isInstalled && (deferredPrompt !== null || isIOS),
+    hasPrompt: deferredPrompt !== null,
+    isIOS,
+    showIOSModal,
+    setShowIOSModal,
+    installPWA,
+  };
+}
 
 interface PWAInstallButtonProps {
   className?: string;
@@ -9,7 +106,6 @@ interface PWAInstallButtonProps {
 export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ className = '' }) => {
   const {
     isInstalled,
-    canInstall,
     hasPrompt,
     isIOS,
     showIOSModal,
@@ -43,7 +139,6 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ className = 
           } else if (isIOS) {
             setShowIOSModal(true);
           } else {
-            // General guidance if prompt not yet fired by browser
             installPWA();
           }
         }}
