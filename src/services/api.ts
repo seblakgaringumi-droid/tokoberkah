@@ -707,6 +707,47 @@ export async function fetchOrders(): Promise<Order[]> {
 }
 
 export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PROCESSED' | 'COMPLETED' | 'CANCELLED'): Promise<Order> {
+  // If moving from PENDING to PROCESSED, deduct stock for products in items_json
+  if (status === 'PROCESSED') {
+    try {
+      const { data: currentOrder } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderId)
+        .single();
+
+      if (currentOrder && currentOrder.status === 'PENDING' && currentOrder.items_json) {
+        const items = Array.isArray(currentOrder.items_json) ? currentOrder.items_json : [];
+        for (const item of items) {
+          const prodId = item.product_id || item.productId;
+          const qty = Number(item.qty) || 0;
+          if (prodId && qty > 0) {
+            try {
+              const { data: prodData } = await supabase
+                .from('products')
+                .select('id, stock_kg, name')
+                .eq('id', prodId)
+                .single();
+
+              if (prodData) {
+                const currentStock = Number(prodData.stock_kg) || 0;
+                const newStock = roundStock(Math.max(0, currentStock - qty));
+                await supabase
+                  .from('products')
+                  .update({ stock_kg: newStock })
+                  .eq('id', prodId);
+              }
+            } catch (stockDeductErr) {
+              console.warn(`Could not deduct stock for product ${prodId}:`, stockDeductErr);
+            }
+          }
+        }
+      }
+    } catch (orderCheckErr) {
+      console.warn('Error reading order for stock deduction:', orderCheckErr);
+    }
+  }
+
   const { data, error } = await supabase
     .from('orders')
     .update({ status })
