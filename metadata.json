@@ -1,0 +1,6 @@
+{
+  "name": "Toko Berkah POS",
+  "description": "Aplikasi Kasir & Manajemen Toko Berkah (POS, Stok, Pesanan, Utang & Laporan) terhubung langsung dengan Supabase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
