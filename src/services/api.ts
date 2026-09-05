@@ -565,7 +565,7 @@ export async function fetchSales(): Promise<Sale[]> {
       const rawItems = sale.sale_items || sale.items || [];
       const cachedMatch = localCached.find(c => c.id === sale.id);
 
-      const items: SaleItem[] = rawItems.map((it: any) => {
+      let items: SaleItem[] = rawItems.map((it: any) => {
         const prod = it.product || productMap[it.product_id] || (cachedMatch?.items?.find(ci => ci.product_id === it.product_id)?.product);
         return {
           id: it.id,
@@ -591,6 +591,11 @@ export async function fetchSales(): Promise<Sale[]> {
           } : undefined,
         };
       });
+
+      // If items array is empty but was cached with items, use cache
+      if (items.length === 0 && cachedMatch?.items && cachedMatch.items.length > 0) {
+        items = cachedMatch.items;
+      }
 
       return {
         ...sale,
@@ -660,7 +665,7 @@ export async function fetchExpenses(): Promise<Expense[]> {
     throw error;
   }
 
-  // Normalize source if not set in DB
+  // Normalize source & category if needed
   return (data || []).map((exp: any) => {
     let source = exp.source;
     if (!source) {
@@ -716,6 +721,22 @@ export async function createExpense(expense: { title: string; amount: number; ca
   return data;
 }
 
+export async function updateExpense(id: string, updates: Partial<Expense>): Promise<Expense> {
+  const { source, ...safeUpdates } = updates as any;
+  const { data, error } = await supabase
+    .from('expenses')
+    .update(safeUpdates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating expense:', error);
+    throw error;
+  }
+  return { ...data, source: source || (data as any)?.source || 'LACI' };
+}
+
 export async function deleteExpense(id: string): Promise<void> {
   const { error } = await supabase
     .from('expenses')
@@ -727,6 +748,7 @@ export async function deleteExpense(id: string): Promise<void> {
     throw error;
   }
 }
+
 
 // ==================== ORDERS ====================
 
@@ -746,12 +768,41 @@ export async function fetchOrders(): Promise<Order[]> {
 export async function processOnlineSaleToReports(order: Order): Promise<Sale | null> {
   try {
     const orderIdStr = `#ORD-${order.id}`;
-    const paymentMethodUpper = (order.payment_method || 'COD').toUpperCase();
-    const isCash = paymentMethodUpper.includes('COD') || paymentMethodUpper.includes('TUNAI') || paymentMethodUpper === 'CASH';
-    const finalPaymentMethod = isCash ? 'CASH' : (paymentMethodUpper.includes('QRIS') ? 'QRIS' : 'TRANSFER');
+    // Preserve original payment method: COD, TRANSFER, QRIS, etc.
+    const rawPaymentMethod = order.payment_method || 'COD';
+    const paymentMethodUpper = rawPaymentMethod.toUpperCase();
+    const isCash = paymentMethodUpper.includes('COD') || paymentMethodUpper.includes('TUNAI') || paymentMethodUpper === 'CASH' || paymentMethodUpper.includes('BAYAR DI TEMPAT');
 
-    // Parse items safely with fallbacks
-    const rawItems = Array.isArray(order.items_json) ? order.items_json : [];
+    // Parse items safely with fallbacks from multiple possible fields
+    let rawItems: any[] = [];
+    if (Array.isArray(order.items_json)) {
+      rawItems = order.items_json;
+    } else if (typeof order.items_json === 'string' && order.items_json.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(order.items_json);
+        rawItems = Array.isArray(parsed) ? parsed : (parsed.items || []);
+      } catch {
+        rawItems = [];
+      }
+    } else if (Array.isArray((order as any).items)) {
+      rawItems = (order as any).items;
+    } else if (Array.isArray((order as any).order_items)) {
+      rawItems = (order as any).order_items;
+    }
+
+    // Fallback if rawItems is somehow empty
+    if (rawItems.length === 0) {
+      rawItems = [{
+        product_id: `prod_online_${order.id}`,
+        name: `Belanjaan Pesanan Online #${order.id}`,
+        product_name: `Belanjaan Pesanan Online #${order.id}`,
+        qty: 1,
+        unit: 'Paket',
+        price: Number(order.total_amount) || 0,
+        subtotal: Number(order.total_amount) || 0,
+      }];
+    }
+
     const localProducts = getLocalProducts();
     const productMap: Record<string, Product> = {};
     localProducts.forEach(p => { productMap[p.id] = p; });
@@ -761,22 +812,26 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
 
     const constructedItems: SaleItem[] = rawItems.map((item: any, idx: number) => {
       const prodId = item.product_id || item.productId || item.id || `prod_${idx}`;
+      const prodName = item.product_name || item.name || item.title || 'Barang Sembako';
+      const qty = Number(item.qty || item.quantity || item.amount || item.qty_kg || 1);
+      const unit = item.unit || item.satuan || 'pcs';
+      const price = Number(item.price || item.selling_price || item.unit_price || (item.subtotal ? item.subtotal / qty : 0));
+      const subtotal = Number(item.subtotal || (price * qty) || (price * qty) || 0);
+      const costPrice = Number(item.cost_price) || (price * 0.8);
+
       const foundProd = productMap[prodId] || {
         id: String(prodId),
-        name: item.product_name || item.name || item.title || 'Produk',
-        category: 'Umum',
-        cost_price: Number(item.cost_price) || (Number(item.price) || 0) * 0.8,
-        selling_price: Number(item.price) || 0,
+        name: prodName,
+        category: 'Sembako',
+        cost_price: costPrice,
+        selling_price: price,
         stock_kg: 100,
         min_stock: 10,
         is_active: true,
-        image_url: null,
-        unit: item.unit || item.satuan || 'pcs',
+        image_url: item.image_url || null,
+        unit: unit,
         barcode: null
       };
-
-      const qty = Number(item.qty || item.quantity || item.amount || 1);
-      const subtotal = Number(item.subtotal || (Number(item.price || 0) * qty) || 0);
 
       return {
         id: `item_online_${order.id}_${idx}`,
@@ -784,18 +839,23 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
         product_id: String(prodId),
         qty_kg: qty,
         subtotal: subtotal,
-        cost_price: Number(foundProd.cost_price) || (Number(item.price || 0) * 0.8),
+        cost_price: Number(foundProd.cost_price) || costPrice,
         original_qty: qty,
-        unit: item.unit || item.satuan || foundProd.unit || 'pcs',
+        unit: unit || foundProd.unit || 'pcs',
         custom_subtotal: subtotal,
-        product: foundProd
+        product: {
+          ...foundProd,
+          name: prodName || foundProd.name,
+          selling_price: price || foundProd.selling_price,
+          unit: unit || foundProd.unit
+        }
       };
     });
 
     const localSale: Sale = {
       id: tempSaleId,
       total_amount: Number(order.total_amount) || 0,
-      payment_method: finalPaymentMethod,
+      payment_method: rawPaymentMethod,
       status: 'COMPLETED',
       created_at: orderTimestamp,
       notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'} (${order.delivery_address || ''})`,
@@ -814,28 +874,58 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       cachedSales[existingIndex] = {
         ...cachedSales[existingIndex],
         ...localSale,
+        payment_method: rawPaymentMethod,
         created_at: cachedSales[existingIndex].created_at || orderTimestamp,
+        items: constructedItems,
+        sale_items: constructedItems,
       };
       saveLocalSales([...cachedSales]);
     } else {
       saveLocalSales([localSale, ...cachedSales]);
     }
 
-    // Try inserting into Supabase sales table (with deduplication check)
+    // Try inserting into Supabase sales & sale_items tables (with deduplication & repair check)
     try {
       const { data: existingDbSales } = await supabase
         .from('sales')
-        .select('id, notes, created_at')
+        .select('id, notes, created_at, payment_method')
         .like('notes', `%${orderIdStr}%`)
         .limit(1);
 
       if (existingDbSales && existingDbSales.length > 0) {
-        // Already recorded in Supabase, ensure it has the correct timestamp if needed
         const existingSaleId = existingDbSales[0].id;
+        
+        // Ensure missing sale_items are saved to DB
+        try {
+          const { data: existingDbItems } = await supabase
+            .from('sale_items')
+            .select('id')
+            .eq('sale_id', existingSaleId);
+
+          if (!existingDbItems || existingDbItems.length === 0) {
+            const itemsPayload = constructedItems.map(it => ({
+              sale_id: existingSaleId,
+              product_id: it.product_id,
+              qty_kg: it.qty_kg,
+              subtotal: it.subtotal,
+              cost_price: it.cost_price || 0,
+              original_qty: it.original_qty || it.qty_kg,
+              unit: it.unit || 'pcs',
+              custom_subtotal: it.custom_subtotal || it.subtotal
+            }));
+            await supabase.from('sale_items').insert(itemsPayload);
+          }
+        } catch (itemCheckErr) {
+          console.warn('Check/insert existing sale_items note:', itemCheckErr);
+        }
+
         const fullSale: Sale = {
           ...localSale,
           id: existingSaleId,
+          payment_method: existingDbSales[0].payment_method || rawPaymentMethod,
           created_at: existingDbSales[0].created_at || orderTimestamp,
+          items: constructedItems,
+          sale_items: constructedItems,
         };
         const updatedSales = getLocalSales().map(s => s.id === tempSaleId || s.id === existingSaleId ? fullSale : s);
         saveLocalSales(updatedSales);
@@ -846,7 +936,7 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
         .from('sales')
         .insert([{
           total_amount: Number(order.total_amount) || 0,
-          payment_method: finalPaymentMethod,
+          payment_method: rawPaymentMethod,
           status: 'COMPLETED',
           notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'} (${order.delivery_address || ''})`,
           created_at: orderTimestamp
@@ -869,11 +959,16 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
             custom_subtotal: it.custom_subtotal || it.subtotal
           }));
 
-          await supabase.from('sale_items').insert(itemsPayload);
+          try {
+            await supabase.from('sale_items').insert(itemsPayload);
+          } catch (itemInsertErr) {
+            console.warn('Insert sale_items exception:', itemInsertErr);
+          }
         }
 
         const fullSale: Sale = {
           ...saleData,
+          payment_method: rawPaymentMethod,
           created_at: saleData.created_at || orderTimestamp,
           items: constructedItems,
           sale_items: constructedItems,
@@ -904,12 +999,14 @@ export async function syncCompletedOrdersToSales(): Promise<{ syncedCount: numbe
     let syncedCount = 0;
     for (const order of completedOrders) {
       const orderIdStr = `#ORD-${order.id}`;
-      const isAlreadyRecorded = sales.some(
+      const existingSale = sales.find(
         s => (s.notes && s.notes.includes(orderIdStr)) || s.id === `sale_online_${order.id}` || s.id.startsWith(`sale_online_${order.id}_`)
       );
 
-      if (!isAlreadyRecorded) {
-        console.log(`Auto-syncing completed online order ${orderIdStr} to sales/reports...`);
+      const needsSyncOrRepair = !existingSale || !existingSale.items || existingSale.items.length === 0;
+
+      if (needsSyncOrRepair) {
+        console.log(`Auto-syncing/repairing completed online order ${orderIdStr} to sales/reports...`);
         await processOnlineSaleToReports(order);
         syncedCount++;
       }
