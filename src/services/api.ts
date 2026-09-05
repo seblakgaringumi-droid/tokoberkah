@@ -16,11 +16,11 @@ const STORE_PROFILE_CACHE_KEY = 'pos_store_profile_cache';
 export const DEFAULT_STORE_PROFILE: StoreProfile = {
   store_name: 'TOKO BERKAH',
   tagline: 'Sembako, Bumbu, & Kebutuhan Harian',
-  address: 'Jl. Kapalanunggal I, Sindangkasih, Ciamis',
-  phone: '0852-9499-6696',
-  footer_message: 'Jazakumullah khairan, terima kasih banyak sudah berbelanja di Toko Sembako Berkah.',
-  footer_policy: 'Semoga belanjaan ini membawa keberkahan dan kesehatan untuk seluruh keluarga di rumah, serta rezeki Kakak dilipatgandakan dan dimudahkan selalu. Aamiin Yaa Robbal Aalamiin',
-  footer_quote: '*** BARAKALLAAHU FIIKUM ***',
+  address: 'Jl. Berkah Raya No. 88, Sejahtera',
+  phone: '0812-3456-7890',
+  footer_message: 'Terima kasih atas kunjungan Anda!',
+  footer_policy: 'Barang yang sudah dibeli dapat ditukar jika ada kerusakan dalam 1x24 jam.',
+  footer_quote: '*** BERKAH SELALU ***',
 };
 
 function getLocalProducts(): Product[] {
@@ -610,6 +610,43 @@ export async function fetchSales(): Promise<Sale[]> {
   }
 }
 
+export async function fetchSalesByDateRange(startDateISO: string, endDateISO: string): Promise<Sale[]> {
+  try {
+    const { data, error } = await supabase
+      .from('sales')
+      .select(`
+        *,
+        sale_items (
+          id,
+          sale_id,
+          product_id,
+          qty_kg,
+          subtotal,
+          cost_price,
+          unit,
+          product:products (id, name, unit, selling_price, cost_price, image_url, category, barcode)
+        )
+      `)
+      .gte('created_at', startDateISO)
+      .lte('created_at', endDateISO)
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      return data as Sale[];
+    }
+  } catch (err) {
+    console.warn('fetchSalesByDateRange fallback to local cache filtering:', err);
+  }
+
+  const allSales = await fetchSales();
+  const start = new Date(startDateISO).getTime();
+  const end = new Date(endDateISO).getTime();
+  return allSales.filter(s => {
+    const t = new Date(s.created_at).getTime();
+    return t >= start && t <= end;
+  });
+}
+
 // ==================== EXPENSES ====================
 
 export async function fetchExpenses(): Promise<Expense[]> {
@@ -719,7 +756,8 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
     const productMap: Record<string, Product> = {};
     localProducts.forEach(p => { productMap[p.id] = p; });
 
-    const tempSaleId = `sale_online_${order.id}_${Date.now()}`;
+    const tempSaleId = `sale_online_${order.id}`;
+    const orderTimestamp = order.created_at || new Date().toISOString();
 
     const constructedItems: SaleItem[] = rawItems.map((item: any, idx: number) => {
       const prodId = item.product_id || item.productId || item.id || `prod_${idx}`;
@@ -741,7 +779,7 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       const subtotal = Number(item.subtotal || (Number(item.price || 0) * qty) || 0);
 
       return {
-        id: `item_online_${Date.now()}_${idx}`,
+        id: `item_online_${order.id}_${idx}`,
         sale_id: tempSaleId,
         product_id: String(prodId),
         qty_kg: qty,
@@ -759,7 +797,7 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       total_amount: Number(order.total_amount) || 0,
       payment_method: finalPaymentMethod,
       status: 'COMPLETED',
-      created_at: new Date().toISOString(),
+      created_at: orderTimestamp,
       notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'} (${order.delivery_address || ''})`,
       items: constructedItems,
       sale_items: constructedItems,
@@ -769,18 +807,41 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       customer_phone: order.customer_phone
     };
 
-    // Save to local cache first
+    // Check existing in local cache
     const cachedSales = getLocalSales();
-    const existingIndex = cachedSales.findIndex(s => s.notes?.includes(orderIdStr) || s.id === tempSaleId);
+    const existingIndex = cachedSales.findIndex(s => s.notes?.includes(orderIdStr) || s.id === tempSaleId || s.id.startsWith(`sale_online_${order.id}`));
     if (existingIndex >= 0) {
-      cachedSales[existingIndex] = localSale;
+      cachedSales[existingIndex] = {
+        ...cachedSales[existingIndex],
+        ...localSale,
+        created_at: cachedSales[existingIndex].created_at || orderTimestamp,
+      };
       saveLocalSales([...cachedSales]);
     } else {
       saveLocalSales([localSale, ...cachedSales]);
     }
 
-    // Try inserting into Supabase sales table
+    // Try inserting into Supabase sales table (with deduplication check)
     try {
+      const { data: existingDbSales } = await supabase
+        .from('sales')
+        .select('id, notes, created_at')
+        .like('notes', `%${orderIdStr}%`)
+        .limit(1);
+
+      if (existingDbSales && existingDbSales.length > 0) {
+        // Already recorded in Supabase, ensure it has the correct timestamp if needed
+        const existingSaleId = existingDbSales[0].id;
+        const fullSale: Sale = {
+          ...localSale,
+          id: existingSaleId,
+          created_at: existingDbSales[0].created_at || orderTimestamp,
+        };
+        const updatedSales = getLocalSales().map(s => s.id === tempSaleId || s.id === existingSaleId ? fullSale : s);
+        saveLocalSales(updatedSales);
+        return fullSale;
+      }
+
       const { data: saleData, error: saleError } = await supabase
         .from('sales')
         .insert([{
@@ -788,7 +849,7 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
           payment_method: finalPaymentMethod,
           status: 'COMPLETED',
           notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'} (${order.delivery_address || ''})`,
-          created_at: new Date().toISOString()
+          created_at: orderTimestamp
         }])
         .select()
         .single();
@@ -813,6 +874,7 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
 
         const fullSale: Sale = {
           ...saleData,
+          created_at: saleData.created_at || orderTimestamp,
           items: constructedItems,
           sale_items: constructedItems,
           customer_name: order.customer_name,
@@ -831,6 +893,33 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
   } catch (err) {
     console.error('Error processing online sale to reports:', err);
     return null;
+  }
+}
+
+export async function syncCompletedOrdersToSales(): Promise<{ syncedCount: number; sales: Sale[] }> {
+  try {
+    const [orders, sales] = await Promise.all([fetchOrders(), fetchSales()]);
+    const completedOrders = orders.filter(o => (o.status || '').toUpperCase() === 'COMPLETED');
+
+    let syncedCount = 0;
+    for (const order of completedOrders) {
+      const orderIdStr = `#ORD-${order.id}`;
+      const isAlreadyRecorded = sales.some(
+        s => (s.notes && s.notes.includes(orderIdStr)) || s.id === `sale_online_${order.id}` || s.id.startsWith(`sale_online_${order.id}_`)
+      );
+
+      if (!isAlreadyRecorded) {
+        console.log(`Auto-syncing completed online order ${orderIdStr} to sales/reports...`);
+        await processOnlineSaleToReports(order);
+        syncedCount++;
+      }
+    }
+
+    const updatedSales = await fetchSales();
+    return { syncedCount, sales: updatedSales };
+  } catch (err) {
+    console.warn('Error during syncCompletedOrdersToSales:', err);
+    return { syncedCount: 0, sales: getLocalSales() };
   }
 }
 
@@ -881,15 +970,7 @@ export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PR
     }
   }
 
-  // 3. If completing the order (COMPLETED), record to Sales & Reports
-  if (status === 'COMPLETED' && currentOrder && currentOrder.status !== 'COMPLETED') {
-    try {
-      await processOnlineSaleToReports(currentOrder);
-    } catch (reportErr) {
-      console.warn('Could not record online order to sales report:', reportErr);
-    }
-  }
-
+  // 3. Update status in Supabase
   const { data, error } = await supabase
     .from('orders')
     .update({ status })
@@ -898,10 +979,22 @@ export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PR
     .single();
 
   if (error) {
-    console.error('Error updating order status:', error);
+    console.error('Error updating order status in Supabase:', error);
     throw error;
   }
-  return data;
+
+  const updatedOrder = data || { ...currentOrder, id: orderId, status };
+
+  // 4. If completing the order (COMPLETED), record to Sales & Reports with original timestamp
+  if (status === 'COMPLETED') {
+    try {
+      await processOnlineSaleToReports(updatedOrder);
+    } catch (reportErr) {
+      console.warn('Could not record online order to sales report:', reportErr);
+    }
+  }
+
+  return updatedOrder;
 }
 
 export async function createOrder(order: Omit<Order, 'id' | 'created_at'>): Promise<Order> {
