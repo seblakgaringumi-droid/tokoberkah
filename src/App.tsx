@@ -26,7 +26,8 @@ import {
   fetchStoreWallets,
   fetchStoreProfile,
   DEFAULT_STORE_PROFILE,
-  seedInitialProductsIfEmpty
+  seedInitialProductsIfEmpty,
+  syncCompletedOrdersToSales
 } from './services/api';
 import { supabase, testConnection } from './lib/supabase';
 import { formatRupiah, playBeep, requestNotificationPermission, showOrderNotification } from './lib/utils';
@@ -98,12 +99,28 @@ export default function App() {
         console.warn('Failed to fetch products:', prodsRes.reason);
       }
 
-      if (salesRes.status === 'fulfilled') setSales(salesRes.value);
-      if (ordersRes.status === 'fulfilled') setOrders(ordersRes.value);
+      let currentSales = salesRes.status === 'fulfilled' ? salesRes.value : [];
+      let currentOrders = ordersRes.status === 'fulfilled' ? ordersRes.value : [];
+
+      if (salesRes.status === 'fulfilled') setSales(currentSales);
+      if (ordersRes.status === 'fulfilled') setOrders(currentOrders);
       if (debtsRes.status === 'fulfilled') setDebts(debtsRes.value);
       if (expensesRes.status === 'fulfilled') setExpenses(expensesRes.value);
       if (walletRes.status === 'fulfilled') setWallet(walletRes.value);
       if (profileRes.status === 'fulfilled' && profileRes.value) setStoreProfile(profileRes.value);
+
+      // Check if any completed orders need auto-syncing to sales/reports
+      const hasCompletedOrders = currentOrders.some(o => (o.status || '').toUpperCase() === 'COMPLETED');
+      if (hasCompletedOrders) {
+        try {
+          const syncRes = await syncCompletedOrdersToSales();
+          if (syncRes.syncedCount > 0) {
+            setSales(syncRes.sales);
+          }
+        } catch (syncErr) {
+          console.warn('Completed orders auto-sync note:', syncErr);
+        }
+      }
 
       // If initial load and 0 products, offer auto-seed
       if (isInitial && currentProducts.length === 0 && status.ok) {
