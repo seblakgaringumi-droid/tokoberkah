@@ -11,6 +11,7 @@ interface OpnameKasModalProps {
   initialCash: number;
   wallet: StoreWallet | null;
   onRefresh: () => Promise<void>;
+  onWalletUpdated?: (wallet: StoreWallet) => void;
 }
 
 export const OpnameKasModal: React.FC<OpnameKasModalProps> = ({
@@ -20,6 +21,7 @@ export const OpnameKasModal: React.FC<OpnameKasModalProps> = ({
   initialCash,
   wallet,
   onRefresh,
+  onWalletUpdated,
 }) => {
   const [actualCashCounted, setActualCashCounted] = useState<number | string>(systemCash || '');
   const [newInitialCash, setNewInitialCash] = useState<number | string>(initialCash || 500000);
@@ -47,6 +49,7 @@ export const OpnameKasModal: React.FC<OpnameKasModalProps> = ({
 
       await upsertStoreWallet(walletPayload);
       playBeep('success');
+      if (onWalletUpdated) onWalletUpdated(walletPayload);
       alert(`Opname kas berhasil disimpan! Modal laci baru di-set menjadi ${formatRupiah(newInit)}.`);
       onClose();
       await onRefresh();
