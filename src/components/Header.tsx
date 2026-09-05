@@ -13,6 +13,15 @@ interface HeaderProps {
   lowStockCount: number;
   storeProfile?: StoreProfile;
   onOpenStoreSettings?: () => void;
+  kasTokoState?: number;
+  kasTokoDetails?: {
+    initialCash: number;
+    cashSales: number;
+    drawerOperationalExpenses: number;
+    drawerStockExpenses: number;
+    totalActualDrawerCash: number;
+  };
+  onNavigateToLaporan?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,6 +33,9 @@ export const Header: React.FC<HeaderProps> = ({
   lowStockCount,
   storeProfile,
   onOpenStoreSettings,
+  kasTokoState,
+  kasTokoDetails,
+  onNavigateToLaporan,
 }) => {
   const storeName = storeProfile?.store_name || 'TOKO BERKAH';
   const tagline = storeProfile?.tagline || 'Sembako & Retail';
@@ -81,12 +93,19 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         )}
 
-        {/* Quick Wallet Cash Pill */}
-        {wallet && (
-          <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 text-gray-800 text-xs font-medium">
+        {/* Quick Wallet Cash Pill - Total Uang Fisik Aktual Laci */}
+        {(kasTokoState !== undefined || wallet) && (
+          <button
+            type="button"
+            onClick={onNavigateToLaporan}
+            className="hidden lg:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 hover:bg-emerald-100/90 border border-emerald-200/90 text-gray-800 text-xs font-medium cursor-pointer transition-all active:scale-95 shadow-2xs group"
+            title={`Kas Toko (Total Uang Fisik Aktual Laci):\n• Modal Awal: ${formatRupiah(kasTokoDetails?.initialCash ?? wallet?.initial_cash ?? 0)}\n• Penjualan Tunai: +${formatRupiah(kasTokoDetails?.cashSales ?? 0)}\n• Biaya Operasional Laci: -${formatRupiah(kasTokoDetails?.drawerOperationalExpenses ?? 0)}\n• Belanja Stok Laci: -${formatRupiah(kasTokoDetails?.drawerStockExpenses ?? 0)}\n= Fisik Aktual Laci: ${formatRupiah(kasTokoState ?? wallet?.initial_cash ?? 0)}\n(Klik untuk buka Laporan & Arus Kas Laci)`}
+          >
             <span className="text-gray-500 font-normal">Kas Toko:</span>
-            <span className="font-bold text-[#1B5E20]">{formatRupiah(wallet.initial_cash)}</span>
-          </div>
+            <span className="font-bold text-[#1B5E20] font-mono tracking-tight text-[13px]">
+              {formatRupiah(kasTokoState ?? wallet?.initial_cash ?? 0)}
+            </span>
+          </button>
         )}
 
         {/* Supabase Status Pill */}
