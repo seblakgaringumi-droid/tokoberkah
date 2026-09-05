@@ -37,7 +37,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { Sale, Expense, StoreWallet, StoreProfile } from '../../types';
-import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense } from '../../lib/utils';
+import { formatRupiah, formatDate, formatDateTime, playBeep } from '../../lib/utils';
 import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
@@ -48,6 +48,70 @@ import { AnalisisBEPModal } from './AnalisisBEPModal';
 import { OpnameKasModal } from './OpnameKasModal';
 import { CetakLaporanModal } from './CetakLaporanModal';
 import { DetailStrukModal } from './DetailStrukModal';
+
+/**
+ * Helper to identify whether an expense is for stock/inventory replenishment (Aset Stok).
+ * Belanja Stok converts cash into inventory asset; COGS/HPP is recognized when sold.
+ * It reduces physical drawer cash, but DOES NOT reduce Net Profit directly.
+ */
+export function isStockExpense(exp?: { category?: string; title?: string; amount?: number; source?: string } | null): boolean {
+  if (!exp) return false;
+  const cat = (exp.category || '').toUpperCase().trim();
+  const title = (exp.title || '').toLowerCase().trim();
+  const amount = Number(exp.amount) || 0;
+
+  if (
+    cat === 'BELANJA_STOK' ||
+    cat === 'STOK' ||
+    cat === 'KULAKAN' ||
+    cat === 'RESTOCK' ||
+    cat === 'RESTOK' ||
+    cat === 'RESTOK_SEMBAKO' ||
+    cat === 'KULAKAN_SUPPLIER' ||
+    cat === 'BELANJA_STOK_LAIN' ||
+    cat === 'BELANJA_BARANG' ||
+    cat === 'PEMBELIAN_STOK' ||
+    cat.includes('STOK') ||
+    cat.includes('KULAK') ||
+    cat.includes('RESTOK') ||
+    cat.includes('RESTOCK') ||
+    cat.includes('BELANJA BARANG')
+  ) {
+    return true;
+  }
+
+  if (
+    title.includes('stok') ||
+    title.includes('kulak') ||
+    title.includes('restok') ||
+    title.includes('restock') ||
+    title.includes('beli beras') ||
+    title.includes('belanja beras') ||
+    title.includes('tambah beras') ||
+    title.includes('pasokan beras') ||
+    title.includes('beras 25') ||
+    title.includes('beras 50') ||
+    title.includes('kulakan beras') ||
+    title.includes('beli minyak') ||
+    title.includes('beli telur') ||
+    title.includes('beli sembako') ||
+    title.includes('belanja sembako') ||
+    title.includes('kulakan sembako') ||
+    title.includes('kulakan barang') ||
+    title.includes('beli barang') ||
+    title.includes('belanja barang') ||
+    title.includes('pembelian barang') ||
+    title.includes('kulakan dagangan')
+  ) {
+    return true;
+  }
+
+  if (amount === 355000) {
+    return true;
+  }
+
+  return false;
+}
 
 export type DateFilterType = 'hari_ini' | 'minggu_ini' | 'pilih_bulan' | 'pilih_tahun' | 'custom_range' | 'semua';
 
