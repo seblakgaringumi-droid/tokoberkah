@@ -1867,8 +1867,11 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
             subtotal: it.subtotal,
           }))}
           totalAmount={selectedSaleForReceipt.total_amount}
+          cashReceived={selectedSaleForReceipt.cash_received}
+          changeAmount={selectedSaleForReceipt.change_amount}
           paymentMethod={selectedSaleForReceipt.payment_method}
-          customerName={selectedSaleForReceipt.notes || undefined}
+          customerName={selectedSaleForReceipt.customer_name || selectedSaleForReceipt.notes || undefined}
+          customerPhone={selectedSaleForReceipt.customer_phone || undefined}
           date={selectedSaleForReceipt.created_at}
           storeProfile={storeProfile}
           onUpdateStoreProfile={onUpdateStoreProfile}
