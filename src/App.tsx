@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Navigation } from './components/Navigation';
 import { KasirView } from './components/Kasir/KasirView';
@@ -30,7 +30,7 @@ import {
   syncCompletedOrdersToSales
 } from './services/api';
 import { supabase, testConnection } from './lib/supabase';
-import { formatRupiah, playBeep, requestNotificationPermission, showOrderNotification } from './lib/utils';
+import { formatRupiah, playBeep, requestNotificationPermission, showOrderNotification, calculateDrawerCash } from './lib/utils';
 import { AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
 
 export default function App() {
@@ -207,12 +207,56 @@ export default function App() {
     };
   }, []);
 
+  // Real-time Database Subscription for Sales, Expenses, and Store Wallet
+  useEffect(() => {
+    const financesChannel = supabase
+      .channel('realtime:finances')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, async () => {
+        try {
+          const s = await fetchSales();
+          setSales(s);
+        } catch (err) {
+          console.warn('Realtime sales sync note:', err);
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, async () => {
+        try {
+          const e = await fetchExpenses();
+          setExpenses(e);
+        } catch (err) {
+          console.warn('Realtime expenses sync note:', err);
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'store_wallets' }, async () => {
+        try {
+          const w = await fetchStoreWallets();
+          if (w) setWallet(w);
+        } catch (err) {
+          console.warn('Realtime wallet sync note:', err);
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(financesChannel);
+    };
+  }, []);
+
   const [cartCount, setCartCount] = useState<number>(0);
 
   // Derived Badges Counters
   const lowStockCount = products.filter((p) => p.stock_kg <= (p.min_stock || 10)).length;
   const pendingOrdersCount = orders.filter((o) => o.status === 'PENDING').length;
   const unpaidDebtsCount = debts.filter((d) => d.status !== 'paid').length;
+
+  // Real-time Kas Toko (Total Uang Fisik Aktual Laci)
+  // Formula: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
+  const kasTokoDetails = useMemo(() => {
+    return calculateDrawerCash(wallet, sales, expenses);
+  }, [wallet, sales, expenses]);
+
+  // Explicitly bound variable 'kasTokoState' for Header
+  const kasTokoState = kasTokoDetails.totalActualDrawerCash;
 
   return (
     <div className="min-h-screen flex flex-row bg-[#f0f2f0] font-sans text-gray-800 overflow-x-hidden">
@@ -240,6 +284,9 @@ export default function App() {
           lowStockCount={lowStockCount}
           storeProfile={storeProfile}
           onOpenStoreSettings={() => setIsStoreSettingsOpen(true)}
+          kasTokoState={kasTokoState}
+          kasTokoDetails={kasTokoDetails}
+          onNavigateToLaporan={() => setActiveTab('laporan')}
         />
 
         {/* Connection Notice if DB issue */}
@@ -287,7 +334,13 @@ export default function App() {
                     const prods = await fetchProducts();
                     setProducts(prods);
                   }}
-                  onSaleCompleted={() => {
+                  onSaleCompleted={(newSale) => {
+                    if (newSale) {
+                      setSales((prev) => {
+                        if (prev.some((s) => s.id === newSale.id)) return prev;
+                        return [newSale, ...prev];
+                      });
+                    }
                     loadAllData(false);
                   }}
                   storeProfile={storeProfile}
@@ -342,6 +395,15 @@ export default function App() {
                   wallet={wallet}
                   onRefresh={async () => {
                     await loadAllData(false);
+                  }}
+                  onExpenseCreated={(newExp) => {
+                    setExpenses((prev) => [newExp, ...prev]);
+                  }}
+                  onExpenseDeleted={(id) => {
+                    setExpenses((prev) => prev.filter((e) => e.id !== id));
+                  }}
+                  onWalletUpdated={(w) => {
+                    setWallet(w);
                   }}
                   storeProfile={storeProfile}
                   onUpdateStoreProfile={setStoreProfile}
