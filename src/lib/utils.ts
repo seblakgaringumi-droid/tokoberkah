@@ -1,4 +1,4 @@
-import { StoreWallet, Sale, Expense } from '../types';
+import { StoreWallet, Sale, Expense, StoreProfile } from '../types';
 
 export function formatRupiah(amount: number | string | null | undefined): string {
   const num = typeof amount === 'number' ? amount : Number(amount) || 0;
@@ -354,4 +354,158 @@ export function calculateDrawerCash(
     totalActualDrawerCash,
   };
 }
+
+/**
+ * Normalizes phone numbers to standard WhatsApp format: e.g. 0812... -> 62812...
+ */
+export function formatWhatsAppNumber(phone: string): string {
+  let cleaned = (phone || '').replace(/[^0-9]/g, '');
+  if (cleaned.startsWith('0')) {
+    cleaned = '62' + cleaned.slice(1);
+  } else if (cleaned.startsWith('8')) {
+    cleaned = '62' + cleaned;
+  }
+  return cleaned;
+}
+
+/**
+ * Extracts phone number if embedded in strings (e.g. "Budi (0812-3456-789)")
+ */
+export function extractPhoneNumber(text?: string | null): string {
+  if (!text) return '';
+  const match = text.match(/(?:\+?62|0)8[0-9\- ]{7,14}/);
+  if (match) {
+    return formatWhatsAppNumber(match[0]);
+  }
+  return '';
+}
+
+export interface WhatsAppReceiptParams {
+  storeProfile?: StoreProfile | null;
+  saleId: string;
+  items: Array<{
+    product: { name: string; selling_price: number; unit?: string | null };
+    qty: number;
+    unit?: string | null;
+    subtotal: number;
+  }>;
+  totalAmount: number;
+  cashReceived?: number;
+  changeAmount?: number;
+  paymentMethod: string;
+  customerName?: string | null;
+  date?: string | null;
+}
+
+/**
+ * Formats full structured receipt message for WhatsApp (api.whatsapp.com / wa.me)
+ */
+export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): string {
+  const {
+    storeProfile,
+    saleId,
+    items,
+    totalAmount,
+    cashReceived,
+    changeAmount,
+    paymentMethod,
+    customerName,
+    date,
+  } = params;
+
+  const storeName = (storeProfile?.store_name || 'TOKO BERKAH').toUpperCase();
+  const tagline = storeProfile?.tagline || 'Sembako, Bumbu, & Kebutuhan Harian';
+  const address = storeProfile?.address || 'Jl. Kalapanunggal I, Sindangkasih, Ciamis';
+  const storePhone = storeProfile?.phone || '0852-9499-6696';
+
+  const cleanSaleId = (() => {
+    const match =
+      saleId.match(/#ORD-(\d+)/i) ||
+      saleId.match(/ORD-(\d+)/i) ||
+      (customerName || '').match(/#ORD-(\d+)/i);
+    if (match) return `#ORD-${match[1]}`;
+    if (saleId.startsWith('sale_online_')) return `#ORD-${saleId.replace('sale_online_', '').slice(0, 5)}`;
+    return saleId.slice(0, 12).toUpperCase();
+  })();
+
+  const cleanPayment = (() => {
+    const m = (paymentMethod || '').toUpperCase();
+    if (m === 'COD' || m.includes('COD') || m.includes('BAYAR DI TEMPAT')) return 'COD (Bayar di Tempat)';
+    if (m === 'CASH' || m === 'TUNAI') return 'Tunai / Cash';
+    if (m === 'QRIS') return 'QRIS';
+    if (m === 'TRANSFER') return 'Transfer Bank';
+    if (m === 'UTANG') return 'Utang / Bon (Belum Lunas)';
+    return paymentMethod;
+  })();
+
+  const formattedDate = formatDateTime(date || new Date().toISOString());
+  const divider = '----------------------------------------';
+
+  const lines: string[] = [];
+
+  // Header Toko
+  lines.push(`*${storeName}*`);
+  if (tagline) lines.push(tagline);
+  if (address) lines.push(address);
+  if (storePhone) lines.push(`WhatsApp: ${storePhone}`);
+  lines.push(divider);
+
+  // Detail Nota
+  lines.push(`*STRUK TRANSAKSI*`);
+  lines.push(`No. Nota : ${cleanSaleId}`);
+  lines.push(`Waktu    : ${formattedDate}`);
+  lines.push(`Kasir    : Petugas Shift #01`);
+  if (customerName) {
+    lines.push(`Pelanggan: ${customerName}`);
+  }
+  lines.push(`Metode   : ${cleanPayment}`);
+  lines.push(divider);
+
+  // Rincian Barang
+  lines.push(`*RINCIAN BARANG:*`);
+  items.forEach((item) => {
+    const unitStr = item.unit || item.product.unit || 'kg';
+    const qtyAlias = formatStockWithAlias(item.qty, unitStr);
+    const unitPrice = formatRupiah(item.product.selling_price);
+    const subtotal = formatRupiah(item.subtotal);
+    lines.push(`• *${item.product.name}*`);
+    lines.push(`  ${qtyAlias} x ${unitPrice} = *${subtotal}*`);
+  });
+  lines.push(divider);
+
+  // Total Belanja
+  lines.push(`*TOTAL BELANJA : ${formatRupiah(totalAmount)}*`);
+  if (cashReceived !== undefined && cashReceived > 0) {
+    lines.push(`Tunai Diterima : ${formatRupiah(cashReceived)}`);
+    lines.push(`Kembalian      : ${formatRupiah(changeAmount || 0)}`);
+  }
+  if (paymentMethod === 'UTANG') {
+    lines.push(`Status         : *BELUM LUNAS (UTANG / BON)*`);
+  }
+  lines.push(divider);
+
+  // Footer / Catatan Ucapan Terima Kasih
+  if (storeProfile?.footer_message) {
+    lines.push(`_${storeProfile.footer_message}_`);
+  } else {
+    lines.push(`_Jazakumullah khairan, terima kasih banyak sudah berbelanja di ${storeProfile?.store_name || 'Toko Sembako Berkah'}._`);
+  }
+
+  if (storeProfile?.footer_policy) {
+    lines.push(storeProfile.footer_policy);
+  } else {
+    lines.push(
+      'Semoga belanjaan ini membawa keberkahan dan kesehatan untuk seluruh keluarga di rumah, serta rezeki Kakak dilipatgandakan dan dimudahkan selalu. Aamiin YRA'
+    );
+  }
+
+  if (storeProfile?.footer_quote) {
+    lines.push(`\n*${storeProfile.footer_quote}*`);
+  } else {
+    lines.push('\n*** BERKAH SELALU ***');
+  }
+
+  return lines.join('\n');
+}
+
 
