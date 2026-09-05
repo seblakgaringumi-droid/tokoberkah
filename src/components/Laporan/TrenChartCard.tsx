@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { BarChart3, TrendingUp, DollarSign, Calendar, Filter, Target } from 'lucide-react';
 import { Sale, Expense } from '../../types';
 import { formatRupiah, formatDate } from '../../lib/utils';
+import { isStockExpense } from './LaporanView';
 
 interface TrenChartCardProps {
   sales: Sale[];
@@ -75,7 +76,7 @@ export const TrenChartCard: React.FC<TrenChartCardProps> = ({
       }
     }
 
-    // Process expenses with source distinction
+    // Process expenses with source & category distinction
     for (const exp of expenses) {
       if (!exp.created_at) continue;
       const key = exp.created_at.split('T')[0];
@@ -83,15 +84,17 @@ export const TrenChartCard: React.FC<TrenChartCardProps> = ({
         const amt = Number(exp.amount) || 0;
         dailyMap[key].totalExpense += amt;
         const isKasBesar = (exp.source || '').toUpperCase() === 'KAS_BESAR';
+        const isStock = isStockExpense(exp);
         if (isKasBesar) {
           dailyMap[key].kasBesarExpense += amt;
-        } else {
+        } else if (!isStock) {
+          // Only operational expenses reduce daily Net Profit (Stock is inventory asset)
           dailyMap[key].drawerExpense += amt;
         }
       }
     }
 
-    // Calculate profits (Daily drawer net profit)
+    // Calculate profits (Daily drawer net profit = Gross Profit - Operational Expenses)
     return dayKeys.map((k) => {
       const item = dailyMap[k];
       item.grossProfit = Math.max(0, item.revenue - item.cost);
