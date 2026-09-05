@@ -72,7 +72,7 @@ const getQuickPresets = (unit?: string) => {
 interface KasirViewProps {
   products: Product[];
   onRefreshProducts: () => Promise<void>;
-  onSaleCompleted?: () => void;
+  onSaleCompleted?: (sale?: Sale) => void;
   storeProfile?: StoreProfile;
   onUpdateStoreProfile?: (profile: StoreProfile) => void;
   onCartCountChange?: (count: number) => void;
@@ -518,7 +518,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
 
       // Refresh product stocks
       await onRefreshProducts();
-      if (onSaleCompleted) onSaleCompleted();
+      if (onSaleCompleted) onSaleCompleted(result.sale);
 
     } catch (err: any) {
       console.error('Checkout error:', err);
