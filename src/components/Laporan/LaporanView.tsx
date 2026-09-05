@@ -127,6 +127,9 @@ interface LaporanViewProps {
   onRefresh: () => Promise<void>;
   storeProfile?: StoreProfile;
   onUpdateStoreProfile?: (profile: StoreProfile) => void;
+  onExpenseCreated?: (expense: Expense) => void;
+  onExpenseDeleted?: (id: string) => void;
+  onWalletUpdated?: (wallet: StoreWallet) => void;
 }
 
 export const LaporanView: React.FC<LaporanViewProps> = ({
@@ -136,6 +139,9 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   onRefresh,
   storeProfile,
   onUpdateStoreProfile,
+  onExpenseCreated,
+  onExpenseDeleted,
+  onWalletUpdated,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'ringkasan' | 'penjualan' | 'pengeluaran' | 'dompet'>('ringkasan');
   const [dateFilter, setDateFilter] = useState<DateFilterType>('hari_ini');
@@ -444,7 +450,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
 
     try {
       setIsSubmittingExpense(true);
-      await createExpense({
+      const created = await createExpense({
         title: expenseTitle.trim(),
         amount: amt,
         category: finalCategory,
@@ -457,6 +463,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
       setExpenseCategory('OPERASIONAL');
       setExpenseType('STOK');
       setExpenseSource('LACI');
+      if (onExpenseCreated && created) onExpenseCreated(created);
       await onRefresh();
     } catch (err: any) {
       alert(`Gagal menyimpan pengeluaran: ${err.message}`);
@@ -471,6 +478,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     try {
       await deleteExpense(id);
       playBeep('beep');
+      if (onExpenseDeleted) onExpenseDeleted(id);
       await onRefresh();
     } catch (err: any) {
       alert(`Gagal menghapus pengeluaran: ${err.message}`);
@@ -482,9 +490,10 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     e.preventDefault();
     try {
       setIsSubmittingWallet(true);
-      await upsertStoreWallet(walletForm);
+      const updated = await upsertStoreWallet(walletForm);
       playBeep('success');
       setIsWalletModalOpen(false);
+      if (onWalletUpdated && updated) onWalletUpdated(updated);
       await onRefresh();
     } catch (err: any) {
       alert(`Gagal menyimpan dompet toko: ${err.message}`);
@@ -1797,6 +1806,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         initialCash={initialCash}
         wallet={wallet}
         onRefresh={onRefresh}
+        onWalletUpdated={onWalletUpdated}
       />
 
       {/* Quick Action Modal: Cetak PDF Laporan */}
