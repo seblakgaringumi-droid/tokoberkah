@@ -30,11 +30,15 @@ import {
   AlertTriangle,
   Coins,
   Check,
-  Info
+  Info,
+  CalendarRange,
+  ArrowRight,
+  Clock,
+  RefreshCw
 } from 'lucide-react';
 import { Sale, Expense, StoreWallet, StoreProfile } from '../../types';
 import { formatRupiah, formatDate, formatDateTime, playBeep } from '../../lib/utils';
-import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet } from '../../services/api';
+import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
 import { SinkingFundCard } from './SinkingFundCard';
@@ -44,6 +48,13 @@ import { AnalisisBEPModal } from './AnalisisBEPModal';
 import { OpnameKasModal } from './OpnameKasModal';
 import { CetakLaporanModal } from './CetakLaporanModal';
 import { DetailStrukModal } from './DetailStrukModal';
+
+export type DateFilterType = 'hari_ini' | 'minggu_ini' | 'pilih_bulan' | 'pilih_tahun' | 'custom_range' | 'semua';
+
+const MONTH_NAMES = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+];
 
 interface LaporanViewProps {
   sales: Sale[];
@@ -63,7 +74,38 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   onUpdateStoreProfile,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'ringkasan' | 'penjualan' | 'pengeluaran' | 'dompet'>('ringkasan');
-  const [dateFilter, setDateFilter] = useState<'hari_ini' | 'minggu_ini' | 'bulan_ini' | 'semua'>('hari_ini');
+  const [dateFilter, setDateFilter] = useState<DateFilterType>('hari_ini');
+
+  // Month & Year selection state
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
+
+  // Custom Date Range state (YYYY-MM-DD)
+  const [customStartDate, setCustomStartDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return d.toISOString().split('T')[0];
+  });
+  const [customEndDate, setCustomEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+
+  // Dynamically compute list of years from data + reasonable range
+  const availableYears = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const yearsSet = new Set<number>([currentYear - 2, currentYear - 1, currentYear, currentYear + 1, currentYear + 2]);
+    sales.forEach(s => {
+      if (s.created_at) {
+        const y = new Date(s.created_at).getFullYear();
+        if (!isNaN(y)) yearsSet.add(y);
+      }
+    });
+    expenses.forEach(e => {
+      if (e.created_at) {
+        const y = new Date(e.created_at).getFullYear();
+        if (!isNaN(y)) yearsSet.add(y);
+      }
+    });
+    return Array.from(yearsSet).sort((a, b) => b - a);
+  }, [sales, expenses]);
 
   // Modals state
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
@@ -97,6 +139,50 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   const [selectedSaleForDetail, setSelectedSaleForDetail] = useState<Sale | null>(null);
   const [expandedSaleIds, setExpandedSaleIds] = useState<Set<string>>(new Set());
 
+  // Auto-Sync Retroactive Online Orders state
+  const [isSyncingOnline, setIsSyncingOnline] = useState(false);
+  const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
+
+  // Auto-sync completed online orders on mount
+  React.useEffect(() => {
+    let isMounted = true;
+    const autoSync = async () => {
+      try {
+        setIsSyncingOnline(true);
+        const res = await syncCompletedOrdersToSales();
+        if (isMounted && res.syncedCount > 0) {
+          setSyncStatusMsg(`Sinkronisasi Berhasil: ${res.syncedCount} pesanan online selesai telah dibukukan otomatis ke laporan.`);
+          await onRefresh();
+        }
+      } catch (err) {
+        console.warn('Auto sync completed orders note:', err);
+      } finally {
+        if (isMounted) setIsSyncingOnline(false);
+      }
+    };
+    autoSync();
+    return () => { isMounted = false; };
+  }, []);
+
+  const handleManualSyncOnline = async () => {
+    try {
+      setIsSyncingOnline(true);
+      const res = await syncCompletedOrdersToSales();
+      if (res.syncedCount > 0) {
+        setSyncStatusMsg(`Berhasil membukukan ${res.syncedCount} pesanan online selesai ke laporan!`);
+        playBeep('success');
+      } else {
+        setSyncStatusMsg('Semua pesanan online selesai sudah sinkron & tercatat dalam laporan.');
+      }
+      await onRefresh();
+      setTimeout(() => setSyncStatusMsg(null), 4000);
+    } catch (err: any) {
+      alert(`Gagal sinkronisasi pesanan online: ${err.message}`);
+    } finally {
+      setIsSyncingOnline(false);
+    }
+  };
+
   const toggleExpandSale = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     setExpandedSaleIds((prev) => {
@@ -110,37 +196,55 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     });
   };
 
-  // Date filtering helper
+  // Date filtering helper with precise timestamp range
   const filterByDate = (dateStr: string) => {
     if (dateFilter === 'semua') return true;
+    if (!dateStr) return false;
     const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return false;
     const now = new Date();
 
     if (dateFilter === 'hari_ini') {
-      return (
-        date.getDate() === now.getDate() &&
-        date.getMonth() === now.getMonth() &&
-        date.getFullYear() === now.getFullYear()
-      );
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      return date >= startOfDay && date <= endOfDay;
     }
+
     if (dateFilter === 'minggu_ini') {
-      const diffTime = Math.abs(now.getTime() - date.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      return diffDays <= 7;
+      const startOf7Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0);
+      const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      return date >= startOf7Days && date <= endOfToday;
     }
-    if (dateFilter === 'bulan_ini') {
-      return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+
+    if (dateFilter === 'pilih_bulan') {
+      const startOfMonth = new Date(selectedYear, selectedMonth, 1, 0, 0, 0, 0);
+      const endOfMonth = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59, 999);
+      return date >= startOfMonth && date <= endOfMonth;
     }
+
+    if (dateFilter === 'pilih_tahun') {
+      const startOfYear = new Date(selectedYear, 0, 1, 0, 0, 0, 0);
+      const endOfYear = new Date(selectedYear, 11, 31, 23, 59, 59, 999);
+      return date >= startOfYear && date <= endOfYear;
+    }
+
+    if (dateFilter === 'custom_range') {
+      if (!customStartDate && !customEndDate) return true;
+      const start = customStartDate ? new Date(`${customStartDate}T00:00:00.000`) : new Date(0);
+      const end = customEndDate ? new Date(`${customEndDate}T23:59:59.999`) : new Date(8640000000000000);
+      return date >= start && date <= end;
+    }
+
     return true;
   };
 
   const filteredSales = useMemo(() => {
     return sales.filter((s) => filterByDate(s.created_at));
-  }, [sales, dateFilter]);
+  }, [sales, dateFilter, selectedMonth, selectedYear, customStartDate, customEndDate]);
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter((e) => filterByDate(e.created_at));
-  }, [expenses, dateFilter]);
+  }, [expenses, dateFilter, selectedMonth, selectedYear, customStartDate, customEndDate]);
 
   // Financial Metrics
   const totalRevenue = useMemo(() => {
@@ -311,55 +415,217 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   const getPeriodLabel = () => {
     if (dateFilter === 'hari_ini') return 'Hari Ini (' + formatDate(new Date().toISOString()) + ')';
     if (dateFilter === 'minggu_ini') return '7 Hari Terakhir';
-    if (dateFilter === 'bulan_ini') return 'Bulan Ini';
+    if (dateFilter === 'pilih_bulan') return `${MONTH_NAMES[selectedMonth]} ${selectedYear}`;
+    if (dateFilter === 'pilih_tahun') return `Tahun ${selectedYear}`;
+    if (dateFilter === 'custom_range') {
+      const s = customStartDate ? formatDate(customStartDate) : 'Awal';
+      const e = customEndDate ? formatDate(customEndDate) : 'Sekarang';
+      return `${s} s/d ${e}`;
+    }
     return 'Semua Waktu';
   };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
       {/* Top Filter & Subtabs Navigation */}
-      <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
-        {/* Sub-tabs */}
-        <div className="flex gap-1.5 p-1.5 bg-white border border-gray-200/80 rounded-full shadow-xs overflow-x-auto w-full sm:w-auto">
-          {[
-            { id: 'ringkasan', label: 'Ringkasan & Kas Laci', icon: BarChart3 },
-            { id: 'penjualan', label: 'Riwayat Transaksi', icon: Receipt },
-            { id: 'pengeluaran', label: 'Biaya Toko', icon: TrendingDown },
-            { id: 'dompet', label: 'Pos Anggaran', icon: Wallet },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isSelected = activeSubTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveSubTab(tab.id as any)}
-                className={`px-4 py-2 rounded-full text-xs font-semibold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
-                  isSelected
-                    ? 'bg-[#2E7D32] text-white shadow-xs'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
+      <div className="space-y-3">
+        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+          {/* Sub-tabs */}
+          <div className="flex gap-1.5 p-1.5 bg-white border border-gray-200/80 rounded-full shadow-xs overflow-x-auto w-full sm:w-auto">
+            {[
+              { id: 'ringkasan', label: 'Ringkasan & Kas Laci', icon: BarChart3 },
+              { id: 'penjualan', label: 'Riwayat Transaksi', icon: Receipt },
+              { id: 'pengeluaran', label: 'Biaya Toko', icon: TrendingDown },
+              { id: 'dompet', label: 'Pos Anggaran', icon: Wallet },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isSelected = activeSubTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveSubTab(tab.id as any)}
+                  className={`px-4 py-2 rounded-full text-xs font-semibold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-[#2E7D32] text-white shadow-xs'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Date Filter selector */}
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <Calendar className="w-4 h-4 text-[#1B5E20] shrink-0" />
+            <select
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value as DateFilterType)}
+              className="px-4 py-2 rounded-full bg-white border border-gray-200 text-xs sm:text-sm font-semibold text-gray-800 shadow-xs focus:ring-2 focus:ring-[#2E7D32] outline-none cursor-pointer"
+            >
+              <option value="hari_ini">Hari Ini</option>
+              <option value="minggu_ini">7 Hari Terakhir</option>
+              <option value="pilih_bulan">Pilih Bulan</option>
+              <option value="pilih_tahun">Pilih Tahun</option>
+              <option value="custom_range">Pilih Tanggal / Custom Range</option>
+              <option value="semua">Semua Waktu</option>
+            </select>
+          </div>
         </div>
 
-        {/* Date Filter selector */}
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-          <Calendar className="w-4 h-4 text-gray-400" />
-          <select
-            value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value as any)}
-            className="px-4 py-2 rounded-full bg-white border border-gray-200 text-xs sm:text-sm font-medium text-gray-800 shadow-xs focus:ring-2 focus:ring-[#2E7D32] outline-none cursor-pointer"
-          >
-            <option value="hari_ini">Hari Ini</option>
-            <option value="minggu_ini">7 Hari Terakhir</option>
-            <option value="bulan_ini">Bulan Ini</option>
-            <option value="semua">Semua Waktu</option>
-          </select>
-        </div>
+        {/* Dynamic Contextual Date Range Selector Bar (When Pilih Bulan, Pilih Tahun, or Custom Range is active) */}
+        {(dateFilter === 'pilih_bulan' || dateFilter === 'pilih_tahun' || dateFilter === 'custom_range') && (
+          <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs shadow-2xs">
+            {/* Opsi 1: Pilih Bulan */}
+            {dateFilter === 'pilih_bulan' && (
+              <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                <span className="font-bold text-emerald-950 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-[#1B5E20]" />
+                  Pilih Bulan & Tahun:
+                </span>
+                {/* Month Dropdown */}
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                  className="px-3 py-1.5 rounded-xl bg-white border border-emerald-300 font-bold text-emerald-950 shadow-2xs focus:ring-2 focus:ring-[#2E7D32] outline-none cursor-pointer"
+                >
+                  {MONTH_NAMES.map((name, idx) => (
+                    <option key={idx} value={idx}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                {/* Year Dropdown */}
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(Number(e.target.value))}
+                  className="px-3 py-1.5 rounded-xl bg-white border border-emerald-300 font-bold text-emerald-950 shadow-2xs focus:ring-2 focus:ring-[#2E7D32] outline-none cursor-pointer"
+                >
+                  {availableYears.map((yr) => (
+                    <option key={yr} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Opsi 2: Pilih Tahun */}
+            {dateFilter === 'pilih_tahun' && (
+              <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                <span className="font-bold text-emerald-950 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-[#1B5E20]" />
+                  Pilih Tahun Pembukuan:
+                </span>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(Number(e.target.value))}
+                  className="px-3.5 py-1.5 rounded-xl bg-white border border-emerald-300 font-bold text-emerald-950 shadow-2xs focus:ring-2 focus:ring-[#2E7D32] outline-none cursor-pointer"
+                >
+                  {availableYears.map((yr) => (
+                    <option key={yr} value={yr}>
+                      Tahun {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Opsi 3: Custom Range Datepicker */}
+            {dateFilter === 'custom_range' && (
+              <div className="flex flex-wrap items-center gap-2.5 w-full">
+                <span className="font-bold text-emerald-950 flex items-center gap-1.5">
+                  <CalendarRange className="w-3.5 h-3.5 text-[#1B5E20]" />
+                  Rentang Tanggal:
+                </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-emerald-300 shadow-2xs">
+                    <span className="text-[11px] text-gray-400 font-medium">Dari:</span>
+                    <input
+                      type="date"
+                      value={customStartDate}
+                      onChange={(e) => setCustomStartDate(e.target.value)}
+                      className="bg-transparent font-semibold text-gray-800 outline-none text-xs cursor-pointer"
+                    />
+                  </div>
+                  <span className="text-gray-400 font-bold">s/d</span>
+                  <div className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-emerald-300 shadow-2xs">
+                    <span className="text-[11px] text-gray-400 font-medium">Sampai:</span>
+                    <input
+                      type="date"
+                      value={customEndDate}
+                      onChange={(e) => setCustomEndDate(e.target.value)}
+                      className="bg-transparent font-semibold text-gray-800 outline-none text-xs cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                {/* Quick Date Presets */}
+                <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+                  <span className="text-[11px] text-emerald-800 font-medium">Preset:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const today = new Date().toISOString().split('T')[0];
+                      setCustomStartDate(today);
+                      setCustomEndDate(today);
+                    }}
+                    className="px-2 py-0.5 rounded-lg bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-[11px] font-semibold cursor-pointer transition-colors"
+                  >
+                    Hari Ini
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      const d = new Date();
+                      d.setDate(d.getDate() - 6);
+                      setCustomStartDate(d.toISOString().split('T')[0]);
+                      setCustomEndDate(now.toISOString().split('T')[0]);
+                    }}
+                    className="px-2 py-0.5 rounded-lg bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-[11px] font-semibold cursor-pointer transition-colors"
+                  >
+                    7 Hari
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+                      const today = now.toISOString().split('T')[0];
+                      setCustomStartDate(firstDay);
+                      setCustomEndDate(today);
+                    }}
+                    className="px-2 py-0.5 rounded-lg bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-[11px] font-semibold cursor-pointer transition-colors"
+                  >
+                    Bulan Ini
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      const d = new Date();
+                      d.setDate(d.getDate() - 29);
+                      setCustomStartDate(d.toISOString().split('T')[0]);
+                      setCustomEndDate(now.toISOString().split('T')[0]);
+                    }}
+                    className="px-2 py-0.5 rounded-lg bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-[11px] font-semibold cursor-pointer transition-colors"
+                  >
+                    30 Hari
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Active Range Summary Badge */}
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-900 bg-white px-2.5 py-1 rounded-xl border border-emerald-200 ml-auto">
+              <Clock className="w-3 h-3 text-[#1B5E20]" />
+              <span>{getPeriodLabel()}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Quick Action Bar */}
@@ -398,6 +664,16 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         </button>
 
         <button
+          onClick={handleManualSyncOnline}
+          disabled={isSyncingOnline}
+          className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition-colors border border-white/15 cursor-pointer disabled:opacity-50"
+          title="Sinkronkan pesanan online berstatus Selesai ke Laporan Omzet Penjualan"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-emerald-300 ${isSyncingOnline ? 'animate-spin' : ''}`} />
+          <span>{isSyncingOnline ? 'Menyinkronkan...' : 'Sinkron Pesanan Online'}</span>
+        </button>
+
+        <button
           onClick={() => setIsCetakModalOpen(true)}
           className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition-colors border border-white/15 cursor-pointer ml-auto"
         >
@@ -405,6 +681,22 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
           <span>Cetak PDF Laporan</span>
         </button>
       </div>
+
+      {/* Sync Notification Banner if active */}
+      {syncStatusMsg && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-2.5 rounded-2xl text-xs font-medium flex items-center justify-between gap-2 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{syncStatusMsg}</span>
+          </div>
+          <button
+            onClick={() => setSyncStatusMsg(null)}
+            className="text-emerald-700 hover:text-emerald-900 text-xs font-bold p-1 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Main Tab: Ringkasan & Kas Laci */}
       {activeSubTab === 'ringkasan' && (
@@ -592,16 +884,20 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
       {/* Sub Tab: Riwayat Transaksi Penjualan */}
       {activeSubTab === 'penjualan' && (
         <div className="bg-white rounded-2xl border border-gray-200 shadow-xs overflow-hidden">
-          <div className="p-4 bg-gray-50 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="p-4 bg-gray-50 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <ShoppingBag className="w-4 h-4 text-[#1B5E20]" />
               <h3 className="font-bold text-gray-900 text-sm">
                 Daftar Penjualan Kasir ({filteredSales.length} Transaksi)
               </h3>
             </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-gray-500 font-medium">
-                Total Omset: <strong className="text-[#1B5E20]">{formatRupiah(totalRevenue)}</strong>
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100/90 text-[#1B5E20] border border-emerald-200 flex items-center gap-1.5">
+                <Calendar className="w-3 h-3" />
+                Periode: {getPeriodLabel()}
+              </span>
+              <span className="text-xs text-gray-600 font-medium">
+                Total Omzet: <strong className="text-[#1B5E20] font-mono text-sm font-bold">{formatRupiah(totalRevenue)}</strong>
               </span>
             </div>
           </div>
@@ -643,6 +939,11 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         }).join(', ')
                       : '1 Transaksi Penjualan';
 
+                    // Online Order recognition
+                    const onlineOrderMatch = (sale.notes || '').match(/#ORD-(\d+)/i) || (sale.notes || '').match(/ORD-(\d+)/i);
+                    const isOnlineOrder = sale.id.startsWith('sale_online_') || Boolean(onlineOrderMatch) || (sale.notes || '').toLowerCase().includes('pesanan online');
+                    const displayOrderCode = onlineOrderMatch ? `#ORD-${onlineOrderMatch[1]}` : (isOnlineOrder ? `#ORD-${sale.id.replace('sale_online_', '').slice(0, 5)}` : `#${sale.id.slice(0, 8).toUpperCase()}`);
+
                     return (
                       <React.Fragment key={sale.id}>
                         <tr 
@@ -668,13 +969,22 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                           </td>
 
                           {/* ID Nota */}
-                          <td className="px-4 py-3 font-mono font-bold text-xs text-gray-900">
-                            <span 
-                              className="inline-flex items-center gap-1 hover:text-[#1B5E20] underline decoration-dotted underline-offset-4"
-                              title="Klik untuk lihat struk belanja lengkap"
-                            >
-                              #{sale.id.slice(0, 8).toUpperCase()}
-                            </span>
+                          <td className="px-4 py-3 font-mono font-bold text-xs">
+                            {isOnlineOrder ? (
+                              <span 
+                                className="inline-flex items-center gap-1 bg-emerald-100/80 text-[#1B5E20] border border-emerald-300/80 px-2 py-0.5 rounded-md font-bold text-[11px] shadow-2xs hover:bg-emerald-200/80 transition-colors"
+                                title="Pesanan Online (Sudah Dibukukan)"
+                              >
+                                🛵 {displayOrderCode}
+                              </span>
+                            ) : (
+                              <span 
+                                className="inline-flex items-center gap-1 text-gray-900 hover:text-[#1B5E20] underline decoration-dotted underline-offset-4"
+                                title="Klik untuk lihat struk belanja lengkap"
+                              >
+                                {displayOrderCode}
+                              </span>
+                            )}
                           </td>
 
                           {/* Waktu */}
