@@ -181,14 +181,17 @@ export const CetakLaporanModal: React.FC<CetakLaporanModalProps> = ({
                 <span className="font-mono font-bold text-sm text-blue-900">{formatRupiah(totalGrossProfit)}</span>
               </div>
               <div className="p-2.5 bg-rose-50 rounded-xl border border-rose-100">
-                <span className="text-[10px] text-rose-700 block">Total Biaya</span>
-                <span className="font-mono font-bold text-sm text-rose-900">{formatRupiah(totalExpenseAmount)}</span>
+                <span className="text-[10px] text-rose-700 block">Biaya Operasional</span>
+                <span className="font-mono font-bold text-sm text-rose-900">{formatRupiah(operationalExpenses)}</span>
               </div>
               <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-100">
                 <span className="text-[10px] text-emerald-800 block">Laba Bersih</span>
                 <span className="font-mono font-bold text-sm text-[#1B5E20]">{formatRupiah(netProfit)}</span>
               </div>
             </div>
+            <p className="text-[10px] text-gray-500 italic text-center">
+              *Rumus Laba Bersih = Laba Kotor - Biaya Operasional ({formatRupiah(operationalExpenses)}). Belanja Stok ({formatRupiah(stockExpenses)}) adalah konversi aset kas menjadi stok barang, tidak memotong laba bersih.
+            </p>
           </div>
 
           {/* 4. Target Cadangan Akumulasi Toko */}
