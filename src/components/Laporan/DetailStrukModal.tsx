@@ -39,8 +39,12 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
   const totalQty = items.reduce((acc, it) => acc + (Number(it.qty_kg) || 1), 0);
   const totalItemTypes = items.length;
 
+  const onlineOrderMatch = (sale.notes || '').match(/#ORD-(\d+)/i) || (sale.notes || '').match(/ORD-(\d+)/i);
+  const isOnlineOrder = sale.id.startsWith('sale_online_') || Boolean(onlineOrderMatch) || (sale.notes || '').toLowerCase().includes('pesanan online');
+  const displayId = onlineOrderMatch ? `#ORD-${onlineOrderMatch[1]}` : (isOnlineOrder ? `#ORD-${sale.id.replace('sale_online_', '').slice(0, 5)}` : `#${sale.id.slice(0, 8).toUpperCase()}`);
+
   const handleCopyId = () => {
-    navigator.clipboard.writeText(sale.id);
+    navigator.clipboard.writeText(displayId);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -91,7 +95,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
             <div>
               <h3 className="font-bold text-base leading-tight">Rincian Struk Belanja</h3>
               <p className="text-xs text-emerald-100/90 flex items-center gap-1.5 mt-0.5">
-                <span>Nota #{sale.id.slice(0, 8).toUpperCase()}</span>
+                <span>Nota {displayId}</span>
                 <span>•</span>
                 <span className="font-medium text-emerald-200">
                   {isUtang ? 'Belum Lunas (Utang)' : 'Transaksi Lunas'}
@@ -117,7 +121,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
                 <span>ID Nota Transaksi:</span>
               </div>
               <div className="flex items-center gap-1.5 font-mono font-bold text-gray-900">
-                <span>#{sale.id.slice(0, 12).toUpperCase()}</span>
+                <span>{displayId}</span>
                 <button
                   onClick={handleCopyId}
                   title="Salin ID Nota"
