@@ -137,6 +137,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
     changeAmount?: number;
     paymentMethod: string;
     customerName?: string;
+    customerPhone?: string;
   }>({
     isOpen: false,
     saleId: '',
@@ -493,6 +494,8 @@ export const KasirView: React.FC<KasirViewProps> = ({
       // Save for receipt
       const currentCart = [...cart];
       const receiptTotal = totalAmount;
+      const savedCustomerName = customerName || undefined;
+      const savedCustomerPhone = customerPhone || undefined;
 
       // Close checkout and mobile cart
       setIsCheckoutModalOpen(false);
@@ -513,7 +516,8 @@ export const KasirView: React.FC<KasirViewProps> = ({
         cashReceived: receiptCash,
         changeAmount: receiptChange,
         paymentMethod: activeMethod,
-        customerName: customerName || undefined,
+        customerName: savedCustomerName,
+        customerPhone: savedCustomerPhone,
       });
 
       // Refresh product stocks
@@ -2231,6 +2235,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
         changeAmount={receiptData.changeAmount}
         paymentMethod={receiptData.paymentMethod}
         customerName={receiptData.customerName}
+        customerPhone={receiptData.customerPhone}
         storeProfile={storeProfile}
         onUpdateStoreProfile={onUpdateStoreProfile}
       />
