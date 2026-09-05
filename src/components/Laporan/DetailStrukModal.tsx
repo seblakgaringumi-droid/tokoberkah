@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Printer, 
@@ -12,10 +12,12 @@ import {
   Check, 
   Clock, 
   FileText,
-  AlertCircle
+  AlertCircle,
+  MessageCircle
 } from 'lucide-react';
-import { Sale } from '../../types';
+import { Sale, SaleItem } from '../../types';
 import { formatRupiah, formatDateTime, formatStock, formatStockWithAlias } from '../../lib/utils';
+import { supabase } from '../../lib/supabase';
 
 interface DetailStrukModalProps {
   isOpen: boolean;
@@ -31,10 +33,126 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
   onPrintReceipt,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [loadedItems, setLoadedItems] = useState<SaleItem[]>([]);
+
+  useEffect(() => {
+    if (!sale) {
+      setLoadedItems([]);
+      return;
+    }
+
+    const currentItems = sale.items || sale.sale_items || [];
+    if (currentItems.length > 0) {
+      setLoadedItems(currentItems);
+      return;
+    }
+
+    // Dynamic fetch/join if items are not present on the sale object
+    let isMounted = true;
+    const fetchItemsRelation = async () => {
+      try {
+        // 1. Check sale_items in Supabase
+        const { data: dbItems } = await supabase
+          .from('sale_items')
+          .select('*, product:products(*)')
+          .eq('sale_id', sale.id);
+
+        if (dbItems && dbItems.length > 0 && isMounted) {
+          const formatted: SaleItem[] = dbItems.map((it: any) => ({
+            id: it.id,
+            sale_id: it.sale_id,
+            product_id: it.product_id,
+            qty_kg: Number(it.qty_kg) || Number(it.original_qty) || 1,
+            subtotal: Number(it.subtotal) || 0,
+            cost_price: Number(it.cost_price) || 0,
+            original_qty: Number(it.original_qty) || Number(it.qty_kg) || 1,
+            unit: it.unit || it.product?.unit || 'pcs',
+            product: it.product || {
+              id: it.product_id,
+              name: it.product_name || 'Barang Sembako',
+              category: 'Sembako',
+              selling_price: it.subtotal && it.qty_kg ? it.subtotal / it.qty_kg : 0,
+              cost_price: it.cost_price || 0,
+              stock_kg: 0,
+              min_stock: 0,
+              is_active: true,
+              image_url: null,
+              unit: it.unit || 'pcs',
+              barcode: null
+            }
+          }));
+          setLoadedItems(formatted);
+          return;
+        }
+
+        // 2. If it's an online order, look up order by id or notes
+        const orderMatch = (sale.notes || '').match(/#ORD-(\d+)/i) || (sale.notes || '').match(/ORD-(\d+)/i) || sale.id.match(/sale_online_(\d+)/i);
+        if (orderMatch && orderMatch[1]) {
+          const orderId = Number(orderMatch[1]);
+          const { data: orderData } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('id', orderId)
+            .single();
+
+          if (orderData && orderData.items_json && isMounted) {
+            let raw: any[] = [];
+            if (Array.isArray(orderData.items_json)) {
+              raw = orderData.items_json;
+            } else if (typeof orderData.items_json === 'string') {
+              try {
+                raw = JSON.parse(orderData.items_json);
+              } catch {
+                raw = [];
+              }
+            }
+
+            const formatted: SaleItem[] = raw.map((it: any, idx: number) => {
+              const qty = Number(it.qty || it.quantity || it.amount || 1);
+              const price = Number(it.price || it.selling_price || (it.subtotal ? it.subtotal / qty : 0));
+              const subtotal = Number(it.subtotal || (price * qty) || 0);
+              return {
+                id: `item_modal_${orderId}_${idx}`,
+                sale_id: sale.id,
+                product_id: String(it.product_id || `prod_${idx}`),
+                qty_kg: qty,
+                subtotal: subtotal,
+                cost_price: Number(it.cost_price) || (price * 0.8),
+                original_qty: qty,
+                unit: it.unit || it.satuan || 'pcs',
+                product: {
+                  id: String(it.product_id || `prod_${idx}`),
+                  name: it.name || it.product_name || 'Barang Sembako',
+                  category: 'Sembako',
+                  cost_price: Number(it.cost_price) || (price * 0.8),
+                  selling_price: price,
+                  stock_kg: 100,
+                  min_stock: 10,
+                  is_active: true,
+                  image_url: it.image_url || null,
+                  unit: it.unit || it.satuan || 'pcs',
+                  barcode: null
+                }
+              };
+            });
+
+            if (formatted.length > 0) {
+              setLoadedItems(formatted);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error loading item relations for modal:', err);
+      }
+    };
+
+    fetchItemsRelation();
+    return () => { isMounted = false; };
+  }, [sale]);
 
   if (!isOpen || !sale) return null;
 
-  const items = sale.items || sale.sale_items || [];
+  const items = loadedItems.length > 0 ? loadedItems : (sale.items || sale.sale_items || []);
   const isUtang = sale.payment_method === 'UTANG' || sale.status === 'unpaid';
   const totalQty = items.reduce((acc, it) => acc + (Number(it.qty_kg) || 1), 0);
   const totalItemTypes = items.length;
@@ -51,6 +169,12 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
 
   const getPaymentBadge = (method: string) => {
     const m = (method || '').toUpperCase();
+    if (m === 'COD' || m.includes('COD') || m.includes('BAYAR DI TEMPAT')) {
+      return {
+        label: 'COD (Bayar di Tempat)',
+        bg: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold',
+      };
+    }
     if (m === 'CASH' || m === 'TUNAI') {
       return {
         label: 'Tunai / Cash',
@@ -294,23 +418,41 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
         </div>
 
         {/* Modal Actions */}
-        <div className="p-4 bg-gray-50 border-t border-gray-200 flex items-center gap-3 shrink-0">
+        <div className="p-4 bg-gray-50 border-t border-gray-200 flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-100 text-gray-700 text-xs sm:text-sm font-semibold transition-colors cursor-pointer text-center"
+            className="px-4 py-2.5 rounded-xl border border-gray-200 bg-white hover:bg-gray-100 text-gray-700 text-xs sm:text-sm font-semibold transition-colors cursor-pointer text-center"
           >
             Tutup
           </button>
           <button
             type="button"
             onClick={() => {
-              onPrintReceipt(sale);
+              onPrintReceipt({
+                ...sale,
+                items: items,
+                sale_items: items,
+              });
             }}
-            className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold shadow-xs transition-colors cursor-pointer"
+            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-[#25D366] hover:bg-[#1EBE5D] text-white text-xs sm:text-sm font-bold shadow-xs transition-colors cursor-pointer"
+          >
+            <MessageCircle className="w-4 h-4 fill-white/20" />
+            <span>Kirim WA</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onPrintReceipt({
+                ...sale,
+                items: items,
+                sale_items: items,
+              });
+            }}
+            className="flex-1 inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold shadow-xs transition-colors cursor-pointer"
           >
             <Printer className="w-4 h-4" />
-            <span>Cetak Ulang Struk</span>
+            <span>Cetak Ulang</span>
           </button>
         </div>
       </div>
