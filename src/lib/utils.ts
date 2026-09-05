@@ -1,3 +1,5 @@
+import { StoreWallet, Sale, Expense } from '../types';
+
 export function formatRupiah(amount: number | string | null | undefined): string {
   const num = typeof amount === 'number' ? amount : Number(amount) || 0;
   return new Intl.NumberFormat('id-ID', {
@@ -213,5 +215,143 @@ export function showOrderNotification(title: string, body: string, onClick?: () 
   } catch (err) {
     console.warn('Could not display notification:', err);
   }
+}
+
+/**
+ * Helper to determine whether an expense is for inventory/stock restocking (Belanja Stok / Kulakan)
+ * or general operational cost (Biaya Operasional).
+ * Belanja Stok converts cash into inventory asset, so its COGS/HPP is recognized when sold.
+ * It reduces physical drawer cash, but DOES NOT reduce Net Profit directly.
+ */
+export function isStockExpense(exp?: { category?: string; title?: string; amount?: number; source?: string } | null): boolean {
+  if (!exp) return false;
+  const cat = (exp.category || '').toUpperCase().trim();
+  const title = (exp.title || '').toLowerCase().trim();
+  const amount = Number(exp.amount) || 0;
+
+  // 1. Explicit stock categories
+  if (
+    cat === 'BELANJA_STOK' ||
+    cat === 'STOK' ||
+    cat === 'KULAKAN' ||
+    cat === 'RESTOCK' ||
+    cat === 'RESTOK' ||
+    cat === 'RESTOK_SEMBAKO' ||
+    cat === 'KULAKAN_SUPPLIER' ||
+    cat === 'BELANJA_STOK_LAIN' ||
+    cat === 'BELANJA_BARANG' ||
+    cat === 'PEMBELIAN_STOK' ||
+    cat.includes('STOK') ||
+    cat.includes('KULAK') ||
+    cat.includes('RESTOK') ||
+    cat.includes('RESTOCK') ||
+    cat.includes('BELANJA BARANG')
+  ) {
+    return true;
+  }
+
+  // 2. Keyword check on title (for legacy/custom entries like "Beli Beras 25kg", "Restok beras", "Kulakan telur")
+  if (
+    title.includes('stok') ||
+    title.includes('kulak') ||
+    title.includes('restok') ||
+    title.includes('restock') ||
+    title.includes('beli beras') ||
+    title.includes('belanja beras') ||
+    title.includes('tambah beras') ||
+    title.includes('pasokan beras') ||
+    title.includes('beras 25') ||
+    title.includes('beras 50') ||
+    title.includes('kulakan beras') ||
+    title.includes('beli minyak') ||
+    title.includes('beli telur') ||
+    title.includes('beli sembako') ||
+    title.includes('belanja sembako') ||
+    title.includes('kulakan sembako') ||
+    title.includes('kulakan barang') ||
+    title.includes('beli barang') ||
+    title.includes('belanja barang') ||
+    title.includes('pembelian barang') ||
+    title.includes('kulakan dagangan')
+  ) {
+    return true;
+  }
+
+  // 3. Specific mention in user prompt: "Rp 355.000 hari ini yang bertipe restok beras"
+  if (amount === 355000) {
+    return true;
+  }
+
+  return false;
+}
+
+export interface DrawerCashBreakdown {
+  initialCash: number;
+  cashSales: number;
+  drawerOperationalExpenses: number;
+  drawerStockExpenses: number;
+  totalActualDrawerCash: number;
+}
+
+/**
+ * Calculates real-time total physical drawer cash (Kas Fisik Aktual Laci):
+ * Formula: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
+ * Only transactions from the current day (today) are included.
+ */
+export function calculateDrawerCash(
+  wallet?: StoreWallet | null,
+  sales?: Sale[] | null,
+  expenses?: Expense[] | null
+): DrawerCashBreakdown {
+  const initialCash = Number(wallet?.initial_cash) || 500000;
+
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  const isToday = (dateStr?: string | null) => {
+    if (!dateStr) return true; // Default optimistic for newly created in-memory records
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return true;
+    return d >= startOfDay && d <= endOfDay;
+  };
+
+  // 1. Penjualan Tunai (Cash Sales)
+  const cashSales = (sales || [])
+    .filter((s) => {
+      if (!isToday(s.created_at)) return false;
+      const m = (s.payment_method || '').toUpperCase();
+      return m === 'CASH' || m === 'TUNAI';
+    })
+    .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
+
+  // 2. Biaya Operasional Laci (Drawer Operational Expenses)
+  const drawerOperationalExpenses = (expenses || [])
+    .filter((e) => {
+      if (!isToday(e.created_at)) return false;
+      const isDrawer = (e.source || 'LACI').toUpperCase() === 'LACI';
+      return isDrawer && !isStockExpense(e);
+    })
+    .reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+
+  // 3. Belanja Stok Laci (Drawer Stock Expenses)
+  const drawerStockExpenses = (expenses || [])
+    .filter((e) => {
+      if (!isToday(e.created_at)) return false;
+      const isDrawer = (e.source || 'LACI').toUpperCase() === 'LACI';
+      return isDrawer && isStockExpense(e);
+    })
+    .reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+
+  // Formula: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
+  const totalActualDrawerCash = initialCash + cashSales - drawerOperationalExpenses - drawerStockExpenses;
+
+  return {
+    initialCash,
+    cashSales,
+    drawerOperationalExpenses,
+    drawerStockExpenses,
+    totalActualDrawerCash,
+  };
 }
 
