@@ -37,7 +37,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { Sale, Expense, StoreWallet, StoreProfile } from '../../types';
-import { formatRupiah, formatDate, formatDateTime, playBeep } from '../../lib/utils';
+import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense } from '../../lib/utils';
 import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
@@ -109,6 +109,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
 
   // Modals state
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [expenseType, setExpenseType] = useState<'STOK' | 'OPERASIONAL'>('STOK');
   const [expenseTitle, setExpenseTitle] = useState('');
   const [expenseAmount, setExpenseAmount] = useState<number | string>('');
   const [expenseCategory, setExpenseCategory] = useState('OPERASIONAL');
@@ -279,13 +280,12 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
       .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
   }, [filteredSales]);
 
-  // Expenses grouped by source: Laci vs Kas Besar
+  // Expenses grouped by source (Laci vs Kas Besar) and category (Belanja Stok vs Biaya Operasional)
   const drawerOperationalExpenses = useMemo(() => {
     return filteredExpenses
       .filter((e) => {
         const isDrawer = (e.source || 'LACI') === 'LACI';
-        const cat = (e.category || '').toUpperCase();
-        return isDrawer && cat !== 'STOK' && cat !== 'KULAKAN';
+        return isDrawer && !isStockExpense(e);
       })
       .reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
   }, [filteredExpenses]);
@@ -294,9 +294,20 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     return filteredExpenses
       .filter((e) => {
         const isDrawer = (e.source || 'LACI') === 'LACI';
-        const cat = (e.category || '').toUpperCase();
-        return isDrawer && (cat === 'STOK' || cat === 'KULAKAN');
+        return isDrawer && isStockExpense(e);
       })
+      .reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+  }, [filteredExpenses]);
+
+  const totalOperationalExpenses = useMemo(() => {
+    return filteredExpenses
+      .filter((e) => !isStockExpense(e))
+      .reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+  }, [filteredExpenses]);
+
+  const totalStockExpenses = useMemo(() => {
+    return filteredExpenses
+      .filter((e) => isStockExpense(e))
       .reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
   }, [filteredExpenses]);
 
@@ -311,15 +322,17 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   }, [filteredExpenses]);
 
   // FORMULA 1: TOTAL UANG FISIK AKTUAL LACI
-  // = Modal Awal + Penjualan Tunai - Pengeluaran Operasional (Laci) - Belanja Stok Laci
+  // = Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
   // *Catatan: Pengeluaran dari Kas Besar TIDAK mengurangi uang fisik laci kasir harian!*
   const totalActualDrawerCash = initialCash + cashSales - drawerOperationalExpenses - drawerStockExpenses;
 
-  // FORMULA 2: ESTIMASI LABA BERSIH HARIAN
-  // Laba Bersih Harian (Kasir/Laci) = Laba Kotor - Pengeluaran Operasional Laci
-  // Laba Bersih Konsolidasi = Laba Kotor - Total Semua Pengeluaran
+  // FORMULA 2: ESTIMASI LABA BERSIH (PERBAIKAN RUMUS)
+  // Laba Bersih = Laba Kotor - Biaya Operasional
+  // *Catatan Penting: Belanja Stok (Restok) adalah konversi Kas menjadi Aset Persediaan/Inventory.
+  // HPP barang sudah otomatis terhitung saat produk terjual (Laba Kotor).
+  // Oleh karena itu, Belanja Stok TIDAK boleh memotong Laba Bersih.*
   const dailyDrawerNetProfit = totalGrossProfit - drawerOperationalExpenses;
-  const netProfit = totalGrossProfit - totalExpenseAmount;
+  const netProfit = totalGrossProfit - totalOperationalExpenses;
 
   // 2. Modul Alokasi Kewajiban & Reservasi Dana (Sinking Fund)
   const DAILY_RENT_TARGET = 22000; // Rp 8.000.000 / tahun
@@ -363,18 +376,22 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
       return;
     }
 
+    const finalCategory = expenseType === 'STOK' ? 'BELANJA_STOK' : (expenseCategory || 'OPERASIONAL');
+
     try {
       setIsSubmittingExpense(true);
       await createExpense({
         title: expenseTitle.trim(),
         amount: amt,
-        category: expenseCategory,
+        category: finalCategory,
         source: expenseSource,
       });
       playBeep('success');
       setIsExpenseModalOpen(false);
       setExpenseTitle('');
       setExpenseAmount('');
+      setExpenseCategory('OPERASIONAL');
+      setExpenseType('STOK');
       setExpenseSource('LACI');
       await onRefresh();
     } catch (err: any) {
@@ -728,17 +745,25 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
             </div>
 
             {/* Total Pengeluaran */}
-            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-gray-500">Total Pengeluaran</span>
-                <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
-                  <TrendingDown className="w-4 h-4" />
+            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-gray-500">Total Pengeluaran Kas</span>
+                  <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                    <TrendingDown className="w-4 h-4" />
+                  </div>
                 </div>
+                <p className="text-lg sm:text-xl font-bold text-rose-900">{formatRupiah(totalExpenseAmount)}</p>
               </div>
-              <p className="text-lg sm:text-xl font-bold text-rose-900">{formatRupiah(totalExpenseAmount)}</p>
-              <div className="text-[10px] text-gray-500 mt-1 flex justify-between">
-                <span>Laci: {formatRupiah(drawerOperationalExpenses + drawerStockExpenses)}</span>
-                {kasBesarExpenses > 0 && <span>Kas Besar: {formatRupiah(kasBesarExpenses)}</span>}
+              <div className="text-[10px] text-gray-500 mt-2 space-y-0.5 pt-1.5 border-t border-gray-100">
+                <div className="flex justify-between">
+                  <span className="text-rose-600 font-medium">• Biaya Operasional:</span>
+                  <span className="font-semibold text-rose-700">{formatRupiah(totalOperationalExpenses)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-amber-700 font-medium">• Belanja Stok (Aset):</span>
+                  <span className="font-semibold text-amber-800">{formatRupiah(totalStockExpenses)}</span>
+                </div>
               </div>
             </div>
 
@@ -753,9 +778,12 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                 </div>
                 <p className="text-lg sm:text-xl font-bold text-white">{formatRupiah(dailyDrawerNetProfit)}</p>
               </div>
-              <p className="text-[10px] text-emerald-200 mt-1">
-                Laba Kotor - Biaya Laci ({formatRupiah(drawerOperationalExpenses)})
-              </p>
+              <div className="text-[10px] text-emerald-200 mt-2 pt-1.5 border-t border-emerald-700/60">
+                <span>Rumus: Laba Kotor - Biaya Operasional ({formatRupiah(drawerOperationalExpenses)})</span>
+                <p className="text-[9.5px] text-emerald-300/80 mt-0.5">
+                  *Belanja stok tidak memotong laba bersih (dihitung saat terjual).
+                </p>
+              </div>
             </div>
           </div>
 
@@ -1157,17 +1185,25 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
           </div>
 
           {/* Filter Source Tabs & Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="p-3.5 bg-white rounded-2xl border border-gray-200 shadow-xs">
-              <span className="text-[11px] font-semibold text-gray-500 block">Total Semua Biaya:</span>
-              <span className="text-lg font-bold font-mono text-gray-900 block mt-0.5">
-                {formatRupiah(totalExpenseAmount)}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="p-3.5 bg-rose-50/60 rounded-2xl border border-rose-200 shadow-xs">
+              <span className="text-[11px] font-semibold text-rose-800 block">Biaya Operasional (Beban):</span>
+              <span className="text-lg font-bold font-mono text-rose-950 block mt-0.5">
+                {formatRupiah(totalOperationalExpenses)}
               </span>
-              <span className="text-[10px] text-gray-400">{filteredExpenses.length} transaksi</span>
+              <span className="text-[10px] text-rose-700">Memotong Estimasi Laba Bersih</span>
+            </div>
+
+            <div className="p-3.5 bg-amber-50/70 rounded-2xl border border-amber-200 shadow-xs">
+              <span className="text-[11px] font-semibold text-amber-800 block">Belanja Stok (Aset/Kulakan):</span>
+              <span className="text-lg font-bold font-mono text-amber-950 block mt-0.5">
+                {formatRupiah(totalStockExpenses)}
+              </span>
+              <span className="text-[10px] text-amber-700">Aset Toko (Tidak potong laba bersih)</span>
             </div>
 
             <div className="p-3.5 bg-emerald-50/70 rounded-2xl border border-emerald-200 shadow-xs">
-              <span className="text-[11px] font-semibold text-emerald-800 block">Dari Laci Kasir:</span>
+              <span className="text-[11px] font-semibold text-emerald-800 block">Keluar Dari Laci Kasir:</span>
               <span className="text-lg font-bold font-mono text-[#1B5E20] block mt-0.5">
                 {formatRupiah(drawerOperationalExpenses + drawerStockExpenses)}
               </span>
@@ -1179,7 +1215,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               <span className="text-lg font-bold font-mono text-blue-900 block mt-0.5">
                 {formatRupiah(kasBesarExpenses)}
               </span>
-              <span className="text-[10px] text-blue-700">Tidak memotong kas laci harian</span>
+              <span className="text-[10px] text-blue-700">Tidak memotong kas fisik laci</span>
             </div>
           </div>
 
@@ -1214,16 +1250,18 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               ) : (
                 displayedExpenses.map((exp) => {
                   const isKasBesar = (exp.source || '').toUpperCase() === 'KAS_BESAR';
+                  const isStock = isStockExpense(exp);
                   return (
                     <div key={exp.id} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                            (exp.category || '').toUpperCase() === 'STOK' || (exp.category || '').toUpperCase() === 'KULAKAN'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-gray-100 text-gray-600'
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-md flex items-center gap-1 uppercase ${
+                            isStock
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                              : 'bg-rose-50 text-rose-800 border border-rose-200'
                           }`}>
-                            {exp.category}
+                            {isStock ? <ShoppingBag className="w-3 h-3 text-amber-700" /> : <Receipt className="w-3 h-3 text-rose-600" />}
+                            <span>{isStock ? 'Belanja Stok (Aset)' : 'Biaya Operasional'}</span>
                           </span>
 
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 ${
@@ -1233,6 +1271,10 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                           }`}>
                             {isKasBesar ? <Landmark className="w-2.5 h-2.5" /> : <Wallet className="w-2.5 h-2.5" />}
                             <span>{isKasBesar ? 'Kas Besar' : 'Laci Kasir'}</span>
+                          </span>
+
+                          <span className={`text-[9.5px] font-medium ${isStock ? 'text-amber-800' : 'text-rose-600'}`}>
+                            {isStock ? '• Tidak potong Laba Bersih' : '• Beban (Memotong Laba Bersih)'}
                           </span>
                         </div>
 
@@ -1329,14 +1371,14 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         </div>
       )}
 
-      {/* Add Expense Modal with Enhanced Source Selection */}
+      {/* Add Expense Modal with Distinct Belanja Stok vs Biaya Operasional Selection */}
       {isExpenseModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 my-8">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl space-y-5 my-8">
             <div className="flex justify-between items-start border-b border-gray-100 pb-3">
               <div>
-                <h3 className="font-bold text-gray-900 text-lg">Catat Pengeluaran Operasional</h3>
-                <p className="text-xs text-gray-500">Pilih sumber dana & masukkan rincian biaya</p>
+                <h3 className="font-bold text-gray-900 text-lg">Catat Pengeluaran Toko</h3>
+                <p className="text-xs text-gray-500">Pemisahan akurat antara Belanja Stok (Aset) vs Biaya Operasional (Beban)</p>
               </div>
               <button
                 onClick={() => setIsExpenseModalOpen(false)}
@@ -1347,126 +1389,233 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
             </div>
 
             <form onSubmit={handleCreateExpense} className="space-y-4 text-xs sm:text-sm">
-              {/* 1. Sumber Dana Operasional Selection */}
+              {/* 1. Kategori / Jenis Pengeluaran Selection */}
               <div className="space-y-2">
                 <label className="block text-gray-800 font-bold text-xs uppercase tracking-wider">
-                  Sumber Dana Pengeluaran <span className="text-rose-500">*</span>
+                  1. Kategori Pengeluaran <span className="text-rose-500">*</span>
                 </label>
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {/* Option A: Laci Kasir Harian */}
+                  {/* Option A: Belanja Stok / Kulakan Laci */}
                   <div
-                    onClick={() => setExpenseSource('LACI')}
-                    className={`p-3 rounded-2xl border-2 cursor-pointer transition-all ${
-                      expenseSource === 'LACI'
-                        ? 'border-[#2E7D32] bg-emerald-50/70 shadow-xs'
+                    onClick={() => {
+                      setExpenseType('STOK');
+                      setExpenseCategory('BELANJA_STOK');
+                    }}
+                    className={`p-3.5 rounded-2xl border-2 cursor-pointer transition-all ${
+                      expenseType === 'STOK'
+                        ? 'border-amber-600 bg-amber-50/70 shadow-xs'
                         : 'border-gray-200 hover:border-gray-300 bg-white'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-1.5 font-bold text-xs text-gray-900">
-                        <Wallet className={`w-4 h-4 ${expenseSource === 'LACI' ? 'text-[#2E7D32]' : 'text-gray-400'}`} />
-                        <span>Laci Kasir Harian</span>
+                      <div className="flex items-center gap-2 font-bold text-xs text-amber-950">
+                        <ShoppingBag className={`w-4 h-4 ${expenseType === 'STOK' ? 'text-amber-700' : 'text-gray-400'}`} />
+                        <span>Belanja Stok / Kulakan Laci</span>
                       </div>
                       <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                        expenseSource === 'LACI' ? 'border-[#2E7D32] bg-[#2E7D32] text-white' : 'border-gray-300'
+                        expenseType === 'STOK' ? 'border-amber-600 bg-amber-600 text-white' : 'border-gray-300'
                       }`}>
-                        {expenseSource === 'LACI' && <Check className="w-3 h-3 stroke-3" />}
+                        {expenseType === 'STOK' && <Check className="w-3 h-3 stroke-3" />}
                       </div>
                     </div>
-                    <p className="text-[11px] text-gray-500 leading-snug">
-                      <strong className="text-[#1B5E20]">Mengurangi</strong> Uang Fisik Laci & dicatat dalam Laba/Rugi Harian.
+                    <p className="text-[11px] text-amber-900 leading-snug">
+                      Untuk pembelian/restok barang dagangan toko (misal: <strong>penambahan beras 25 kg</strong>, minyak, telur, sembako).
                     </p>
+                    <span className="inline-block mt-2 text-[10px] font-bold px-2 py-0.5 rounded bg-amber-200/70 text-amber-900">
+                      Masuk Kolom 4 (Aset Stok)
+                    </span>
                   </div>
 
-                  {/* Option B: Kas Besar / Saldo Cadangan */}
+                  {/* Option B: Biaya Operasional */}
                   <div
-                    onClick={() => setExpenseSource('KAS_BESAR')}
-                    className={`p-3 rounded-2xl border-2 cursor-pointer transition-all ${
-                      expenseSource === 'KAS_BESAR'
-                        ? 'border-blue-600 bg-blue-50/70 shadow-xs'
+                    onClick={() => {
+                      setExpenseType('OPERASIONAL');
+                      if (expenseCategory === 'BELANJA_STOK') setExpenseCategory('OPERASIONAL');
+                    }}
+                    className={`p-3.5 rounded-2xl border-2 cursor-pointer transition-all ${
+                      expenseType === 'OPERASIONAL'
+                        ? 'border-rose-600 bg-rose-50/70 shadow-xs'
                         : 'border-gray-200 hover:border-gray-300 bg-white'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-1.5 font-bold text-xs text-gray-900">
-                        <Landmark className={`w-4 h-4 ${expenseSource === 'KAS_BESAR' ? 'text-blue-600' : 'text-gray-400'}`} />
-                        <span>Kas Besar / Cadangan</span>
+                      <div className="flex items-center gap-2 font-bold text-xs text-rose-950">
+                        <Receipt className={`w-4 h-4 ${expenseType === 'OPERASIONAL' ? 'text-rose-600' : 'text-gray-400'}`} />
+                        <span>Biaya Operasional</span>
                       </div>
                       <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                        expenseSource === 'KAS_BESAR' ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-300'
+                        expenseType === 'OPERASIONAL' ? 'border-rose-600 bg-rose-600 text-white' : 'border-gray-300'
                       }`}>
-                        {expenseSource === 'KAS_BESAR' && <Check className="w-3 h-3 stroke-3" />}
+                        {expenseType === 'OPERASIONAL' && <Check className="w-3 h-3 stroke-3" />}
                       </div>
                     </div>
-                    <p className="text-[11px] text-gray-500 leading-snug">
-                      <strong className="text-blue-700">TIDAK mengurangi</strong> Uang Fisik Laci, hanya tercatat di Laporan Bulanan/Utama.
+                    <p className="text-[11px] text-rose-900 leading-snug">
+                      Untuk biaya non-stok harian (listrik, bensin kulakan, plastik kemasan, gaji, konsumsi, dll.).
                     </p>
+                    <span className="inline-block mt-2 text-[10px] font-bold px-2 py-0.5 rounded bg-rose-200/70 text-rose-900">
+                      Masuk Kolom 3 (Beban Operasional)
+                    </span>
                   </div>
                 </div>
               </div>
 
-              {/* 2. Judul / Keperluan */}
+              {/* Sub-Kategori Operasional (hanya jika Biaya Operasional dipilih) */}
+              {expenseType === 'OPERASIONAL' && (
+                <div className="p-3 bg-rose-50/50 rounded-2xl border border-rose-100 space-y-1.5 animate-in fade-in">
+                  <label className="block text-rose-900 font-bold text-xs">
+                    Rincian Sub-Kategori Operasional:
+                  </label>
+                  <select
+                    value={expenseCategory}
+                    onChange={(e) => setExpenseCategory(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-rose-300 bg-white focus:border-rose-600 outline-none text-xs"
+                  >
+                    <option value="OPERASIONAL">OPERASIONAL UMUM TOKO</option>
+                    <option value="LISTRIK_AIR">LISTRIK, AIR & WIFI</option>
+                    <option value="PACKAGING">KEMASAN / PLASTIK KRESEK</option>
+                    <option value="TRANSPORT">TRANSPORTASI / BENSIN KULAKAN</option>
+                    <option value="GAJI">GAJI / UPAH KARYAWAN</option>
+                    <option value="MAKAN">KONSUMSI / MAKAN KARYAWAN</option>
+                    <option value="LAIN_LAIN">BIAYA LAIN-LAIN</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Quick Chip Suggestions for Belanja Stok */}
+              {expenseType === 'STOK' && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] text-amber-800 font-semibold">Contoh Cepat:</span>
+                  {[
+                    'Beras Gunung Cupu 25 kg',
+                    'Beras Heler Pulen 50 kg',
+                    'Minyak Goreng Curah',
+                    'Telur Ayam Ras 15 kg',
+                    'Gula Pasir 50 kg',
+                    'Sembako Toko',
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setExpenseTitle(preset)}
+                      className="px-2 py-0.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-medium cursor-pointer transition-colors"
+                    >
+                      +{preset}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* 2. Sumber Dana Pengeluaran */}
+              <div className="space-y-1.5">
+                <label className="block text-gray-800 font-bold text-xs uppercase tracking-wider">
+                  2. Sumber Dana Pengeluaran <span className="text-rose-500">*</span>
+                </label>
+                
+                <div className="grid grid-cols-2 gap-2">
+                  <div
+                    onClick={() => setExpenseSource('LACI')}
+                    className={`p-2.5 rounded-xl border-2 cursor-pointer transition-all ${
+                      expenseSource === 'LACI'
+                        ? 'border-[#2E7D32] bg-emerald-50/70'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-gray-900 flex items-center gap-1">
+                        <Wallet className="w-3.5 h-3.5 text-[#2E7D32]" />
+                        Laci Kasir Harian
+                      </span>
+                      {expenseSource === 'LACI' && <Check className="w-3 h-3 text-[#2E7D32] stroke-3" />}
+                    </div>
+                    <span className="text-[10px] text-gray-500 block mt-0.5">Memotong uang fisik di laci</span>
+                  </div>
+
+                  <div
+                    onClick={() => setExpenseSource('KAS_BESAR')}
+                    className={`p-2.5 rounded-xl border-2 cursor-pointer transition-all ${
+                      expenseSource === 'KAS_BESAR'
+                        ? 'border-blue-600 bg-blue-50/70'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-gray-900 flex items-center gap-1">
+                        <Landmark className="w-3.5 h-3.5 text-blue-600" />
+                        Kas Besar / Cadangan
+                      </span>
+                      {expenseSource === 'KAS_BESAR' && <Check className="w-3 h-3 text-blue-600 stroke-3" />}
+                    </div>
+                    <span className="text-[10px] text-gray-500 block mt-0.5">Tidak memotong kas fisik laci</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Judul / Keperluan */}
               <div>
                 <label className="block text-gray-700 font-semibold mb-1">
-                  Judul / Keperluan Pengeluaran <span className="text-rose-500">*</span>
+                  3. Judul / Keperluan Pengeluaran <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="Contoh: Beli Beras dari Laci / Token Listrik / Beli Plastik"
+                  placeholder={
+                    expenseType === 'STOK'
+                      ? 'Contoh: Beras Gunung Cupu 25 kg / Kulakan Minyak Goreng'
+                      : 'Contoh: Token Listrik / Beli Plastik Kresek / Bensin'
+                  }
                   value={expenseTitle}
                   onChange={(e) => setExpenseTitle(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-300 focus:border-[#2E7D32] focus:ring-2 focus:ring-emerald-50 outline-none text-xs sm:text-sm"
                 />
               </div>
 
-              {/* 3. Kategori Biaya */}
-              <div>
-                <label className="block text-gray-700 font-semibold mb-1">Kategori Biaya</label>
-                <select
-                  value={expenseCategory}
-                  onChange={(e) => setExpenseCategory(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-2xl border border-gray-300 bg-white focus:border-[#2E7D32] outline-none text-xs sm:text-sm"
-                >
-                  <option value="OPERASIONAL">OPERASIONAL UMUM</option>
-                  <option value="STOK">BELANJA STOK DARI LACI (RESTOK)</option>
-                  <option value="LISTRIK_AIR">LISTRIK & AIR</option>
-                  <option value="PACKAGING">KEMASAN / PLASTIK</option>
-                  <option value="GAJI">GAJI KARYAWAN</option>
-                  <option value="TRANSPORT">TRANSPORTASI / BENSIN</option>
-                  <option value="LAIN_LAIN">LAIN-LAIN</option>
-                </select>
-              </div>
-
               {/* 4. Nominal Biaya */}
               <div>
                 <label className="block text-gray-700 font-semibold mb-1">
-                  Nominal Biaya (Rp) <span className="text-rose-500">*</span>
+                  4. Nominal Biaya (Rp) <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="number"
                   min="1"
                   required
-                  placeholder="Contoh: 50000"
+                  placeholder="Contoh: 355000"
                   value={expenseAmount}
                   onChange={(e) => setExpenseAmount(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-2xl border border-gray-300 font-mono font-bold text-rose-600 focus:border-[#2E7D32] outline-none text-base"
                 />
               </div>
 
-              {/* Real-Time Impact Alert */}
-              <div className={`p-3 rounded-2xl text-xs flex items-center gap-2 ${
-                expenseSource === 'LACI'
-                  ? 'bg-amber-50 border border-amber-200 text-amber-900'
-                  : 'bg-blue-50 border border-blue-200 text-blue-900'
+              {/* Real-Time Impact & Accounting Formula Alert */}
+              <div className={`p-3.5 rounded-2xl text-xs space-y-1.5 ${
+                expenseType === 'STOK'
+                  ? 'bg-amber-50 border border-amber-200 text-amber-950'
+                  : 'bg-rose-50 border border-rose-200 text-rose-950'
               }`}>
-                <Info className="w-4 h-4 shrink-0" />
-                <span>
-                  {expenseSource === 'LACI'
-                    ? `Dampak: Uang fisik di laci kasir akan terpotong sebesar ${expenseAmount ? formatRupiah(Number(expenseAmount)) : 'Rp 0'}.`
-                    : 'Dampak: Uang kasir tetap utuh. Biaya dialokasikan ke pembukuan Kas Besar Toko.'}
-                </span>
+                <div className="flex items-center gap-2 font-bold">
+                  <Info className="w-4 h-4 shrink-0" />
+                  <span>Dampak Alokasi Pembukuan & Kas:</span>
+                </div>
+                <div className="text-[11px] space-y-1 pl-6">
+                  <p>
+                    • <strong>Kas Fisik Laci:</strong>{' '}
+                    {expenseSource === 'LACI'
+                      ? `Uang fisik kasir akan berkurang ${expenseAmount ? formatRupiah(Number(expenseAmount)) : 'Rp 0'}.`
+                      : 'Uang fisik kasir tetap utuh (dibayar dari Kas Besar).'}
+                  </p>
+                  <p>
+                    • <strong>Dampak Laba Bersih:</strong>{' '}
+                    {expenseType === 'STOK' ? (
+                      <span className="text-[#1B5E20] font-bold">
+                        TIDAK MEMOTONG Laba Bersih Toko (karena ini adalah konversi kas menjadi Aset Stok/Persediaan; HPP dihitung saat barang terjual).
+                      </span>
+                    ) : (
+                      <span className="text-rose-700 font-bold">
+                        MEMOTONG Estimasi Laba Bersih Toko sebesar {expenseAmount ? formatRupiah(Number(expenseAmount)) : 'Rp 0'} (beban operasional langsung).
+                      </span>
+                    )}
+                  </p>
+                </div>
               </div>
 
               {/* Action Buttons */}
@@ -1474,14 +1623,14 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsExpenseModalOpen(false)}
-                  className="flex-1 py-3 rounded-2xl border border-gray-300 text-gray-700 font-semibold hover:bg-gray-100 transition-colors"
+                  className="flex-1 py-3 rounded-2xl border border-gray-300 text-gray-700 font-semibold hover:bg-gray-100 transition-colors cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingExpense}
-                  className="flex-1 py-3 rounded-2xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white font-bold transition-colors shadow-xs cursor-pointer"
+                  className="flex-1 py-3 rounded-2xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white font-bold transition-colors shadow-xs cursor-pointer disabled:opacity-50"
                 >
                   {isSubmittingExpense ? 'Menyimpan...' : 'Simpan Pengeluaran'}
                 </button>
