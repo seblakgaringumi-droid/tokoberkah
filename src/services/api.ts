@@ -368,6 +368,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
     sale_id: tempSaleId,
     product_id: item.product.id,
     qty_kg: item.qty,
+    qty: item.qty,
     subtotal: item.subtotal,
     cost_price: item.product.cost_price || 0,
     original_qty: item.qty,
@@ -441,6 +442,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
       if (insertedItems && insertedItems.length > 0) {
         finalItems = insertedItems.map((ins, idx) => ({
           ...ins,
+          qty: ins.qty_kg || ins.original_qty || payload.items[idx]?.qty || 1,
           product: payload.items[idx]?.product,
         }));
         finalSale.items = finalItems;
@@ -698,6 +700,226 @@ export async function fetchSalesByDateRange(startDateISO: string, endDateISO: st
     const t = new Date(s.created_at).getTime();
     return t >= start && t <= end;
   });
+}
+
+export interface DeleteSaleItemResult {
+  success: boolean;
+  updatedSale?: Sale;
+  deletedItemName?: string;
+  restoredQty?: number;
+  restoredUnit?: string;
+  newTotalAmount?: number;
+  error?: string;
+}
+
+/**
+ * Hapus item tertentu dari riwayat transaksi penjualan (sales & sale_items),
+ * dengan opsi mengembalikan stok produk ke database/cache, serta sinkronisasi
+ * total belanja dan catatan utang jika metode pembayaran adalah BON/UTANG.
+ */
+export async function deleteSaleItem(
+  saleId: string,
+  itemId: string,
+  productId: string,
+  qtyToRestore: number,
+  subtotalToDeduct: number,
+  restoreStock: boolean = true
+): Promise<DeleteSaleItemResult> {
+  try {
+    const localSales = getLocalSales();
+    const existingSale = localSales.find(s => s.id === saleId);
+    const existingItems = existingSale?.items || existingSale?.sale_items || [];
+    
+    // Temukan data item yang akan dihapus
+    const targetItem = existingItems.find(it => 
+      (itemId && it.id === itemId) || 
+      (productId && it.product_id === productId)
+    );
+    
+    const prodName = targetItem?.product?.name || 'Produk';
+    const prodUnit = targetItem?.unit || targetItem?.product?.unit || 'pcs';
+    const actualQty = qtyToRestore || Number(targetItem?.qty_kg || targetItem?.qty || 1);
+    const actualSubtotal = subtotalToDeduct || Number(targetItem?.subtotal || 0);
+
+    // 1. Hapus record item dari tabel sale_items Supabase
+    let deletedFromDb = false;
+    if (itemId && !itemId.startsWith('item_modal_') && !itemId.startsWith('item_temp_')) {
+      const { error: delErr } = await supabase
+        .from('sale_items')
+        .delete()
+        .eq('id', itemId);
+      if (!delErr) {
+        deletedFromDb = true;
+      }
+    }
+    if (!deletedFromDb && saleId && productId) {
+      await supabase
+        .from('sale_items')
+        .delete()
+        .eq('sale_id', saleId)
+        .eq('product_id', productId);
+    }
+
+    // 2. Jika transaksi ini berasal dari pesanan online, perbarui items_json & total_amount di tabel orders
+    if (existingSale) {
+      const orderMatch = (existingSale.notes || '').match(/#ORD-(\d+)/i) || 
+                         (existingSale.notes || '').match(/ORD-(\d+)/i) || 
+                         existingSale.id.match(/sale_online_(\d+)/i);
+      if (orderMatch && orderMatch[1]) {
+        try {
+          const orderId = Number(orderMatch[1]);
+          const { data: ord } = await supabase.from('orders').select('*').eq('id', orderId).single();
+          if (ord && ord.items_json) {
+            let raw: any[] = [];
+            if (Array.isArray(ord.items_json)) raw = ord.items_json;
+            else if (typeof ord.items_json === 'string') {
+              try { raw = JSON.parse(ord.items_json); } catch {}
+            }
+            const filteredOrdItems = raw.filter((it: any) => String(it.product_id || it.id) !== String(productId));
+            const newOrdTotal = filteredOrdItems.reduce((acc: number, it: any) => acc + Number(it.subtotal || (Number(it.price || 0) * Number(it.qty || it.quantity || 1))), 0);
+            await supabase.from('orders').update({
+              items_json: filteredOrdItems,
+              total_amount: newOrdTotal
+            }).eq('id', orderId);
+          }
+        } catch (ordErr) {
+          console.warn('Sync order items error on delete:', ordErr);
+        }
+      }
+    }
+
+    // 3. Kembalikan stok produk jika diminta
+    if (restoreStock && productId) {
+      try {
+        const { data: prodData } = await supabase
+          .from('products')
+          .select('stock_kg')
+          .eq('id', productId)
+          .single();
+
+        if (prodData) {
+          const newStock = roundStock((prodData.stock_kg || 0) + actualQty);
+          await supabase
+            .from('products')
+            .update({ stock_kg: newStock })
+            .eq('id', productId);
+        }
+      } catch (stockErr) {
+        console.warn('Failed to restore Supabase stock:', stockErr);
+      }
+
+      // Perbarui cache produk lokal
+      const localProds = getLocalProducts();
+      const updatedProds = localProds.map(p => {
+        if (p.id === productId) {
+          return { ...p, stock_kg: roundStock((p.stock_kg || 0) + actualQty) };
+        }
+        return p;
+      });
+      saveLocalProducts(updatedProds);
+    }
+
+    // 4. Hitung ulang total belanja transaksi
+    const remainingItems = existingItems.filter(it => 
+      !((itemId && it.id === itemId) || (productId && it.product_id === productId))
+    );
+    const newTotal = Math.max(0, remainingItems.reduce((acc, it) => acc + Number(it.subtotal || 0), 0));
+    
+    try {
+      await supabase
+        .from('sales')
+        .update({ total_amount: newTotal })
+        .eq('id', saleId);
+    } catch (saleUpdateErr) {
+      console.warn('Failed to update sale total in Supabase:', saleUpdateErr);
+    }
+
+    // 5. Jika metode pembayaran adalah UTANG / BON, sinkronkan catatan piutang
+    if (existingSale?.payment_method === 'UTANG') {
+      const noteTag = saleId.slice(0, 8);
+      try {
+        const { data: matchingDebts } = await supabase
+          .from('debts_credits')
+          .select('*')
+          .ilike('notes', `%${noteTag}%`);
+
+        if (matchingDebts && matchingDebts.length > 0) {
+          for (const d of matchingDebts) {
+            const newRemaining = Math.max(0, (Number(d.remaining_amount) || 0) - actualSubtotal);
+            const newTotalDebt = Math.max(0, (Number(d.total_amount) || 0) - actualSubtotal);
+            await supabase
+              .from('debts_credits')
+              .update({
+                remaining_amount: newRemaining,
+                total_amount: newTotalDebt,
+                status: newRemaining === 0 ? 'paid' : d.status,
+              })
+              .eq('id', d.id);
+          }
+        }
+      } catch (debtErr) {
+        console.warn('Failed to sync debts on sale item delete:', debtErr);
+      }
+
+      // Perbarui cache buku utang lokal
+      const localDebts = getLocalDebts();
+      const updatedDebts = localDebts.map(d => {
+        if (d.notes?.includes(noteTag)) {
+          const newRemaining = Math.max(0, (Number(d.remaining_amount) || 0) - actualSubtotal);
+          const newTotalDebt = Math.max(0, (Number(d.total_amount) || 0) - actualSubtotal);
+          return {
+            ...d,
+            remaining_amount: newRemaining,
+            total_amount: newTotalDebt,
+            status: (newRemaining === 0 ? 'paid' : d.status) as any,
+          };
+        }
+        return d;
+      });
+      saveLocalDebts(updatedDebts);
+    }
+
+    // 6. Simpan pembaruan ke cache transaksi lokal
+    let updatedSale: Sale | undefined;
+    const updatedSales = localSales.map(s => {
+      if (s.id === saleId) {
+        const up: Sale = {
+          ...s,
+          total_amount: newTotal,
+          items: remainingItems,
+          sale_items: remainingItems,
+        };
+        updatedSale = up;
+        return up;
+      }
+      return s;
+    });
+    saveLocalSales(updatedSales);
+
+    if (!updatedSale && existingSale) {
+      updatedSale = {
+        ...existingSale,
+        total_amount: newTotal,
+        items: remainingItems,
+        sale_items: remainingItems,
+      };
+    }
+
+    return {
+      success: true,
+      updatedSale,
+      deletedItemName: prodName,
+      restoredQty: actualQty,
+      restoredUnit: prodUnit,
+      newTotalAmount: newTotal,
+    };
+  } catch (err: any) {
+    console.error('deleteSaleItem error:', err);
+    return {
+      success: false,
+      error: err.message || 'Gagal menghapus item transaksi',
+    };
+  }
 }
 
 // ==================== EXPENSES ====================
