@@ -14,11 +14,13 @@ import {
   Database,
   Sparkles,
   ArrowUpDown,
-  Image as ImageIcon
+  Image as ImageIcon,
+  FileText
 } from 'lucide-react';
-import { Product } from '../../types';
+import { Product, StoreProfile } from '../../types';
 import { formatRupiah, playBeep, formatStock, roundStock } from '../../lib/utils';
 import { ProductImageUploader } from './ProductImageUploader';
+import { KatalogModal } from '../Katalog/KatalogModal';
 import { 
   createProduct, 
   updateProduct, 
@@ -30,9 +32,10 @@ import {
 interface StokViewProps {
   products: Product[];
   onRefresh: () => Promise<void>;
+  storeProfile?: StoreProfile;
 }
 
-export const StokView: React.FC<StokViewProps> = ({ products, onRefresh }) => {
+export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storeProfile }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('Semua');
   const [filterLowStockOnly, setFilterLowStockOnly] = useState(false);
@@ -42,6 +45,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh }) => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isStockAdjustModalOpen, setIsStockAdjustModalOpen] = useState<Product | null>(null);
   const [stockDelta, setStockDelta] = useState<number | string>('');
+  const [isKatalogModalOpen, setIsKatalogModalOpen] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState<{
@@ -365,8 +369,18 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh }) => {
           )}
 
           <button
+            type="button"
+            onClick={() => setIsKatalogModalOpen(true)}
+            className="px-4 py-2.5 rounded-full border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] text-xs sm:text-sm font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-[0.98] cursor-pointer"
+            title="Download & Cetak Katalog Produk PDF Resmi Toko Berkah"
+          >
+            <FileText className="w-4 h-4 text-[#2E7D32]" />
+            <span>Cetak / Download Katalog</span>
+          </button>
+
+          <button
             onClick={handleOpenAdd}
-            className="px-5 py-2.5 rounded-full bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 shadow-xs transition-all active:scale-[0.98]"
+            className="px-5 py-2.5 rounded-full bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 shadow-xs transition-all active:scale-[0.98] cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Tambah Produk</span>
@@ -871,6 +885,14 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh }) => {
           </div>
         </div>
       )}
+
+      {/* Katalog Produk Download & Print Modal */}
+      <KatalogModal
+        isOpen={isKatalogModalOpen}
+        onClose={() => setIsKatalogModalOpen(false)}
+        products={products}
+        storeProfile={storeProfile}
+      />
     </div>
   );
 };
