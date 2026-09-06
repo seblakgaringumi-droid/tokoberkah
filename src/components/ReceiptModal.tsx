@@ -5,6 +5,7 @@ import {
   formatDateTime, 
   formatStock, 
   formatStockWithAlias,
+  getWeightAlias,
   formatWhatsAppNumber,
   extractPhoneNumber,
   generateWhatsAppReceiptText
@@ -16,7 +17,16 @@ import { EditStoreProfileModal } from './EditStoreProfileModal';
 interface ReceiptItem {
   product?: Product;
   qty?: number;
+  quantity?: number;
+  weight?: number;
+  qty_kg?: number;
+  jumlah?: number;
+  original_qty?: number;
+  amount?: number;
   unit?: string;
+  price?: number;
+  product_name?: string;
+  name?: string;
   subtotal?: number;
   [key: string]: any;
 }
@@ -273,17 +283,42 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
               {safeItems.map((item: any, idx: number) => {
                 if (!item) return null;
                 const prodName = item.product?.name || item.product_name || item.name || 'Produk';
-                const prodPrice = Number(item.product?.selling_price ?? item.price ?? 0);
-                const unitStr = item.unit || item.product?.unit || item.product_unit || 'kg';
-                const itemQty = Number(item.qty ?? 0);
+                const unit = item.unit || item.product?.unit || item.product_unit || 'pcs';
+
+                // 1. Property mapping dengan fallback menyeluruh (qty, quantity, weight, qty_kg, jumlah, dll)
+                const rawQty = item.qty ?? item.quantity ?? item.weight ?? item.qty_kg ?? item.jumlah ?? item.original_qty ?? item.amount;
+                const itemQty = Number(rawQty) || (item.subtotal && item.price ? Number(item.subtotal) / Number(item.price) : 1);
+
+                // Harga Satuan & Subtotal
+                const prodPrice = Number(
+                  item.product?.selling_price ?? 
+                  item.price ?? 
+                  item.selling_price ?? 
+                  (item.subtotal && itemQty > 0 ? Math.round(item.subtotal / itemQty) : 0)
+                );
                 const itemSubtotal = Number(item.subtotal ?? (prodPrice * itemQty));
+
+                // 2. Format Angka Desimal (Timbangan / kg / gram vs Pcs)
+                const isWeightUnit = ['kg', 'kilogram', 'gram', 'gr', 'g', 'ons', 'liter', 'ltr', 'l', 'timbangan'].includes(
+                  (unit || '').toLowerCase().trim()
+                );
+                const formattedQty = isWeightUnit
+                  ? Number(itemQty).toLocaleString('id-ID', {
+                      minimumFractionDigits: Number.isInteger(itemQty) ? 0 : 1,
+                      maximumFractionDigits: 3,
+                    })
+                  : itemQty;
+
+                // Alias timbangan tradisional (Saparapat, Setengah, 1 Ons) jika sesuai
+                const alias = getWeightAlias(itemQty, unit);
+                const qtyDisplay = alias ? `${formattedQty} ${unit} (${alias})` : `${formattedQty} ${unit}`;
 
                 return (
                   <div key={idx} className="space-y-0.5">
                     <div className="font-medium text-gray-900 line-clamp-1">{prodName}</div>
                     <div className="flex justify-between text-xs text-gray-600">
                       <span>
-                        {formatStockWithAlias(itemQty, unitStr)} x {formatRupiah(prodPrice)}
+                        {qtyDisplay} x {formatRupiah(prodPrice)}
                       </span>
                       <span className="font-semibold text-gray-900">{formatRupiah(itemSubtotal)}</span>
                     </div>
