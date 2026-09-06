@@ -38,31 +38,52 @@
 
 /* Print Receipt / Struk, Financial Report & Product Catalog Formatting */
 @media print {
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    height: auto !important;
+    min-height: 100% !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
   body * {
     visibility: hidden;
   }
+
+  /* Hide navigation, toolbars, overlays, and modals marked with .no-print */
+  .no-print,
+  .no-print * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* Make printable sections fully visible */
   #printable-receipt, #printable-receipt *,
   .printable-report, .printable-report *,
   #printable-catalog, #printable-catalog *,
   .printable-catalog, .printable-catalog * {
     visibility: visible;
   }
+
   #printable-receipt, .printable-report, #printable-catalog, .printable-catalog {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    margin: 0;
-    padding: 12px;
-    background: white !important;
-    color: black !important;
+    position: relative !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
   }
-  .no-print {
-    display: none !important;
-  }
+
   .page-break-avoid {
-    break-inside: avoid;
-    page-break-inside: avoid;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
   }
 }
 
