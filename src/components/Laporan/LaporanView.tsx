@@ -130,6 +130,7 @@ interface LaporanViewProps {
   onExpenseCreated?: (expense: Expense) => void;
   onExpenseDeleted?: (id: string) => void;
   onWalletUpdated?: (wallet: StoreWallet) => void;
+  onSaleUpdated?: (updatedSale: Sale) => void;
 }
 
 export const LaporanView: React.FC<LaporanViewProps> = ({
@@ -142,6 +143,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   onExpenseCreated,
   onExpenseDeleted,
   onWalletUpdated,
+  onSaleUpdated,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'ringkasan' | 'penjualan' | 'pengeluaran' | 'dompet'>('ringkasan');
   const [dateFilter, setDateFilter] = useState<DateFilterType>('hari_ini');
@@ -1202,7 +1204,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                                       return (
                                         <div 
                                           key={idx} 
-                                          className="bg-gray-50/80 rounded-lg p-2.5 border border-gray-200/60 flex items-center justify-between text-xs"
+                                          className="bg-gray-50/80 rounded-lg p-2.5 border border-gray-200/60 flex items-center justify-between text-xs hover:border-gray-300 transition-colors"
                                         >
                                           <div className="min-w-0 pr-2">
                                             <p className="font-semibold text-gray-800 truncate">{pName}</p>
@@ -1210,10 +1212,21 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                                               {it.qty_kg} {u} @ {formatRupiah(unitPrice)}
                                             </p>
                                           </div>
-                                          <div className="text-right shrink-0">
+                                          <div className="text-right shrink-0 flex items-center gap-2">
                                             <span className="font-mono font-bold text-gray-900 block">
                                               {formatRupiah(it.subtotal)}
                                             </span>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSelectedSaleForDetail(sale);
+                                              }}
+                                              title="Hapus / kelola rincian item"
+                                              className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
                                           </div>
                                         </div>
                                       );
@@ -1839,6 +1852,13 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         sale={selectedSaleForDetail}
         onPrintReceipt={(sale) => {
           setSelectedSaleForReceipt(sale);
+        }}
+        onSaleUpdated={(updatedSale) => {
+          setSelectedSaleForDetail(updatedSale);
+          if (onSaleUpdated) {
+            onSaleUpdated(updatedSale);
+          }
+          onRefresh().catch(console.warn);
         }}
       />
 
