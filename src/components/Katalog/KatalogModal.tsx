@@ -19,8 +19,6 @@ import {
   Share2,
   CheckCircle2
 } from 'lucide-react';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 import { Product, StoreProfile } from '../../types';
 import { formatRupiah, formatStockWithAlias } from '../../lib/utils';
 import { DEFAULT_STORE_PROFILE } from '../../services/api';
@@ -115,7 +113,7 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
     window.print();
   };
 
-  // Download PDF using html2canvas & jsPDF
+  // Download PDF using html2canvas & jsPDF (dynamically imported for fast bundles & build reliability)
   const handleDownloadPdf = async () => {
     if (!printRef.current) return;
     
@@ -126,8 +124,26 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
 
       const target = printRef.current;
 
+      // Dynamically load libraries
+      let html2canvasFn: any;
+      let jsPDFClass: any;
+
+      try {
+        const [jspdfModule, h2cModule] = await Promise.all([
+          import('jspdf'),
+          import('html2canvas'),
+        ]);
+        jsPDFClass = jspdfModule.jsPDF || jspdfModule.default;
+        html2canvasFn = h2cModule.default || h2cModule;
+      } catch (importErr) {
+        console.warn('Dynamic import of jspdf/html2canvas failed, falling back to browser print:', importErr);
+        window.print();
+        setIsGeneratingPdf(false);
+        return;
+      }
+
       // Render to canvas with scale 2 for high quality (sharp text & images)
-      const canvas = await html2canvas(target, {
+      const canvas = await html2canvasFn(target, {
         scale: 2,
         useCORS: true,
         allowTaint: true,
@@ -137,7 +153,7 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
       });
 
       const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdf = new jsPDFClass('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth(); // 210mm
       const pdfHeight = pdf.internal.pageSize.getHeight(); // 297mm
       
