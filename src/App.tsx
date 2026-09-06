@@ -419,6 +419,9 @@ export default function App() {
                     }}
                     storeProfile={storeProfile}
                     onUpdateStoreProfile={setStoreProfile}
+                    onSaleUpdated={(updatedSale) => {
+                      setSales((prev) => prev.map((s) => (s.id === updatedSale.id ? updatedSale : s)));
+                    }}
                   />
                 )}
               </>
