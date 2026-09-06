@@ -14,21 +14,22 @@ import { DEFAULT_STORE_PROFILE, fetchStoreProfile } from '../services/api';
 import { EditStoreProfileModal } from './EditStoreProfileModal';
 
 interface ReceiptItem {
-  product: Product;
-  qty: number;
-  unit: string;
-  subtotal: number;
+  product?: Product;
+  qty?: number;
+  unit?: string;
+  subtotal?: number;
+  [key: string]: any;
 }
 
 interface ReceiptModalProps {
   isOpen: boolean;
   onClose: () => void;
-  saleId: string;
-  items: ReceiptItem[];
-  totalAmount: number;
+  saleId?: string;
+  items?: ReceiptItem[] | any[];
+  totalAmount?: number;
   cashReceived?: number;
   changeAmount?: number;
-  paymentMethod: string;
+  paymentMethod?: string;
   customerName?: string;
   customerPhone?: string;
   date?: string;
@@ -40,11 +41,11 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   isOpen,
   onClose,
   saleId,
-  items,
-  totalAmount,
+  items = [],
+  totalAmount = 0,
   cashReceived,
   changeAmount,
-  paymentMethod,
+  paymentMethod = 'CASH',
   customerName,
   customerPhone,
   date,
@@ -53,6 +54,12 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 }) => {
   const [profile, setProfile] = useState<StoreProfile>(initialStoreProfile || DEFAULT_STORE_PROFILE);
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
+
+  const isUtang = (paymentMethod || '').toUpperCase() === 'UTANG';
+  const effectiveCustomerName = customerName || (isUtang ? 'Pelanggan Utang' : undefined);
+  const safeSaleId = String(saleId || `BON-${Date.now().toString().slice(-6)}`);
+  const safeItems = Array.isArray(items) ? items : [];
+  const safeTotal = Number(totalAmount || 0);
 
   // WhatsApp Send Modal State
   const [isWaModalOpen, setIsWaModalOpen] = useState(false);
@@ -67,7 +74,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     if (customerPhone) {
       setWaPhone(customerPhone);
     } else {
-      const extracted = extractPhoneNumber(customerName);
+      const extracted = extractPhoneNumber(effectiveCustomerName);
       if (extracted) {
         setWaPhone(extracted);
       } else {
@@ -77,7 +84,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     setWaError('');
     setWaSuccessNotice(false);
     setLastGeneratedUrl('');
-  }, [customerPhone, customerName, isOpen]);
+  }, [customerPhone, effectiveCustomerName, isOpen]);
 
   useEffect(() => {
     if (initialStoreProfile) {
@@ -118,13 +125,13 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
     const receiptText = generateWhatsAppReceiptText({
       storeProfile: profile,
-      saleId,
-      items,
-      totalAmount,
+      saleId: safeSaleId,
+      items: safeItems,
+      totalAmount: safeTotal,
       cashReceived,
       changeAmount,
       paymentMethod,
-      customerName,
+      customerName: effectiveCustomerName,
       date,
     });
 
@@ -144,7 +151,16 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           <div className="no-print bg-gradient-to-r from-[#1B5E20] to-[#2E7D32] text-white px-5 py-3.5 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-200" />
-              <h3 className="font-bold text-base">Struk Transaksi</h3>
+              <div>
+                <h3 className="font-bold text-base leading-tight">
+                  {isUtang ? 'Struk Transaksi Utang / Bon' : 'Struk Transaksi'}
+                </h3>
+                {isUtang && (
+                  <span className="text-[10px] text-emerald-100/90 font-medium">
+                    Tercatat di Buku Utang Pelanggan
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-1">
               <button
@@ -164,6 +180,19 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Success Notification Banner for Utang / Bon */}
+          {isUtang && (
+            <div className="no-print bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between text-xs text-amber-900 font-medium animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                <span>Transaksi Utang Berhasil Disimpan</span>
+              </div>
+              <span className="text-[10px] font-bold bg-amber-200/80 px-2 py-0.5 rounded text-amber-900">
+                BELUM LUNAS
+              </span>
+            </div>
+          )}
 
           {/* Printable Area - Thermal Paper Style */}
           <div className="p-5 sm:p-6 overflow-y-auto font-mono text-sm leading-tight text-gray-800 bg-white" id="printable-receipt">
@@ -199,10 +228,13 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 <span>No. Nota:</span>
                 <span className="font-semibold">
                   {(() => {
-                    const match = saleId.match(/#ORD-(\d+)/i) || saleId.match(/ORD-(\d+)/i) || (customerName || '').match(/#ORD-(\d+)/i);
+                    const match =
+                      safeSaleId.match(/#ORD-(\d+)/i) ||
+                      safeSaleId.match(/ORD-(\d+)/i) ||
+                      (effectiveCustomerName || '').match(/#ORD-(\d+)/i);
                     if (match) return `#ORD-${match[1]}`;
-                    if (saleId.startsWith('sale_online_')) return `#ORD-${saleId.replace('sale_online_', '').slice(0, 5)}`;
-                    return saleId.slice(0, 12).toUpperCase();
+                    if (safeSaleId.startsWith('sale_online_')) return `#ORD-${safeSaleId.replace('sale_online_', '').slice(0, 5)}`;
+                    return safeSaleId.slice(0, 12).toUpperCase();
                   })()}
                 </span>
               </div>
@@ -214,10 +246,10 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 <span>Kasir:</span>
                 <span>Petugas Shift #01</span>
               </div>
-              {customerName && (
+              {effectiveCustomerName && (
                 <div className="flex justify-between">
                   <span>Pelanggan:</span>
-                  <span className="font-semibold">{customerName}</span>
+                  <span className="font-semibold">{effectiveCustomerName}</span>
                 </div>
               )}
               <div className="flex justify-between">
@@ -229,8 +261,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                     if (m === 'CASH' || m === 'TUNAI') return 'Tunai / Cash';
                     if (m === 'QRIS') return 'QRIS';
                     if (m === 'TRANSFER') return 'Transfer Bank';
-                    if (m === 'UTANG') return 'Utang / Bon';
-                    return paymentMethod;
+                    if (m === 'UTANG') return 'Utang / Bon (Belum Lunas)';
+                    return paymentMethod || 'Tunai';
                   })()}
                 </span>
               </div>
@@ -238,24 +270,33 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
             {/* Itemized list */}
             <div className="py-3 border-b border-dashed border-gray-400 space-y-2">
-              {items.map((item, idx) => (
-                <div key={idx} className="space-y-0.5">
-                  <div className="font-medium text-gray-900 line-clamp-1">{item.product.name}</div>
-                  <div className="flex justify-between text-xs text-gray-600">
-                    <span>
-                      {formatStockWithAlias(item.qty, item.unit || item.product.unit || 'kg')} x {formatRupiah(item.product.selling_price)}
-                    </span>
-                    <span className="font-semibold text-gray-900">{formatRupiah(item.subtotal)}</span>
+              {safeItems.map((item: any, idx: number) => {
+                if (!item) return null;
+                const prodName = item.product?.name || item.product_name || item.name || 'Produk';
+                const prodPrice = Number(item.product?.selling_price ?? item.price ?? 0);
+                const unitStr = item.unit || item.product?.unit || item.product_unit || 'kg';
+                const itemQty = Number(item.qty ?? 0);
+                const itemSubtotal = Number(item.subtotal ?? (prodPrice * itemQty));
+
+                return (
+                  <div key={idx} className="space-y-0.5">
+                    <div className="font-medium text-gray-900 line-clamp-1">{prodName}</div>
+                    <div className="flex justify-between text-xs text-gray-600">
+                      <span>
+                        {formatStockWithAlias(itemQty, unitStr)} x {formatRupiah(prodPrice)}
+                      </span>
+                      <span className="font-semibold text-gray-900">{formatRupiah(itemSubtotal)}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Totals Calculation */}
             <div className="py-3 border-b border-dashed border-gray-400 text-xs space-y-1.5">
               <div className="flex justify-between text-sm font-bold text-gray-900">
                 <span>TOTAL BELANJA</span>
-                <span>{formatRupiah(totalAmount)}</span>
+                <span>{formatRupiah(safeTotal)}</span>
               </div>
               {cashReceived !== undefined && cashReceived > 0 && (
                 <>
@@ -269,7 +310,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   </div>
                 </>
               )}
-              {paymentMethod === 'UTANG' && (
+              {isUtang && (
                 <div className="mt-1 p-1.5 bg-amber-50 rounded border border-amber-300 text-amber-900 text-center font-bold text-xs">
                   STATUS: UTANG / BON (Belum Lunas)
                 </div>
