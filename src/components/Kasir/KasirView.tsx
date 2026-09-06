@@ -518,7 +518,21 @@ export const KasirView: React.FC<KasirViewProps> = ({
       const safeCustomerName = safeSale?.customer_name || finalCustomerName || (activeMethod === 'UTANG' ? 'Pelanggan Utang' : undefined);
       const safeCustomerPhone = safeSale?.customer_phone || finalCustomerPhone;
       const safeItems = Array.isArray(safeSale?.items) && safeSale.items.length > 0 
-        ? safeSale.items 
+        ? safeSale.items.map((it: any, idx: number) => {
+            const rawQty = it.qty ?? it.quantity ?? it.weight ?? it.qty_kg ?? it.jumlah ?? it.original_qty ?? currentCart[idx]?.qty ?? 1;
+            const parsedQty = Number(rawQty) || 1;
+            return {
+              ...it,
+              qty: parsedQty,
+              quantity: parsedQty,
+              weight: parsedQty,
+              qty_kg: parsedQty,
+              unit: it.unit || it.product?.unit || currentCart[idx]?.unit || 'pcs',
+              price: Number(it.price ?? it.product?.selling_price ?? currentCart[idx]?.product?.selling_price ?? 0),
+              subtotal: Number(it.subtotal ?? currentCart[idx]?.subtotal ?? 0),
+              product: it.product || currentCart[idx]?.product,
+            };
+          })
         : currentCart;
 
       // 3. Notification toast for Utang
