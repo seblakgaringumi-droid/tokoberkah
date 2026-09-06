@@ -7,6 +7,7 @@ import { PesananView } from './components/Pesanan/PesananView';
 import { UtangView } from './components/Utang/UtangView';
 import { LaporanView } from './components/Laporan/LaporanView';
 import { EditStoreProfileModal } from './components/EditStoreProfileModal';
+import { KatalogModal } from './components/Katalog/KatalogModal';
 import { 
   ActiveTab, 
   Product, 
@@ -51,6 +52,7 @@ export default function App() {
   const [wallet, setWallet] = useState<StoreWallet | null>(null);
   const [storeProfile, setStoreProfile] = useState<StoreProfile>(DEFAULT_STORE_PROFILE);
   const [isStoreSettingsOpen, setIsStoreSettingsOpen] = useState(false);
+  const [isGlobalCatalogOpen, setIsGlobalCatalogOpen] = useState(false);
 
   // Web Notification Permission State
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(() => {
@@ -284,6 +286,7 @@ export default function App() {
           lowStockCount={lowStockCount}
           storeProfile={storeProfile}
           onOpenStoreSettings={() => setIsStoreSettingsOpen(true)}
+          onOpenCatalog={() => setIsGlobalCatalogOpen(true)}
           kasTokoState={kasTokoState}
           kasTokoDetails={kasTokoDetails}
           onNavigateToLaporan={() => setActiveTab('laporan')}
@@ -352,6 +355,7 @@ export default function App() {
               {activeTab === 'stok' && (
                 <StokView
                   products={products}
+                  storeProfile={storeProfile}
                   onRefresh={async () => {
                     const prods = await fetchProducts();
                     setProducts(prods);
@@ -437,6 +441,14 @@ export default function App() {
         onClose={() => setIsStoreSettingsOpen(false)}
         currentProfile={storeProfile}
         onProfileUpdated={(updated) => setStoreProfile(updated)}
+      />
+
+      {/* Global Product Catalog Modal */}
+      <KatalogModal
+        isOpen={isGlobalCatalogOpen}
+        onClose={() => setIsGlobalCatalogOpen(false)}
+        products={products}
+        storeProfile={storeProfile}
       />
     </div>
   );
