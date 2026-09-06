@@ -36,27 +36,33 @@
   background: #94A3B8;
 }
 
-/* Print Receipt / Struk & Financial Report Formatting */
+/* Print Receipt / Struk, Financial Report & Product Catalog Formatting */
 @media print {
   body * {
     visibility: hidden;
   }
   #printable-receipt, #printable-receipt *,
-  .printable-report, .printable-report * {
+  .printable-report, .printable-report *,
+  #printable-catalog, #printable-catalog *,
+  .printable-catalog, .printable-catalog * {
     visibility: visible;
   }
-  #printable-receipt, .printable-report {
+  #printable-receipt, .printable-report, #printable-catalog, .printable-catalog {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
     margin: 0;
-    padding: 16px;
+    padding: 12px;
     background: white !important;
     color: black !important;
   }
   .no-print {
     display: none !important;
+  }
+  .page-break-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }
 
