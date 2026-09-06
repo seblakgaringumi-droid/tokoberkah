@@ -23,6 +23,28 @@ import { Product, StoreProfile } from '../../types';
 import { formatRupiah, formatStockWithAlias } from '../../lib/utils';
 import { DEFAULT_STORE_PROFILE } from '../../services/api';
 
+// Helper to dynamically load external script in browser without bundling
+const loadScript = (src: string): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    if ((window as any).html2pdf) {
+      resolve();
+      return;
+    }
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () => reject(new Error('Failed to load script')));
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load script'));
+    document.head.appendChild(script);
+  });
+};
+
 interface KatalogModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -113,7 +135,7 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
     window.print();
   };
 
-  // Download PDF using html2canvas & jsPDF (dynamically imported for fast bundles & build reliability)
+  // Download PDF via client-side html2pdf or native print dialog (no bundler imports to guarantee zero build errors)
   const handleDownloadPdf = async () => {
     if (!printRef.current) return;
     
@@ -123,69 +145,42 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
       setPdfSuccessNotice(false);
 
       const target = printRef.current;
-
-      // Dynamically load libraries
-      let html2canvasFn: any;
-      let jsPDFClass: any;
-
-      try {
-        const [jspdfModule, h2cModule] = await Promise.all([
-          import('jspdf'),
-          import('html2canvas'),
-        ]);
-        jsPDFClass = jspdfModule.jsPDF || jspdfModule.default;
-        html2canvasFn = h2cModule.default || h2cModule;
-      } catch (importErr) {
-        console.warn('Dynamic import of jspdf/html2canvas failed, falling back to browser print:', importErr);
-        window.print();
-        setIsGeneratingPdf(false);
-        return;
-      }
-
-      // Render to canvas with scale 2 for high quality (sharp text & images)
-      const canvas = await html2canvasFn(target, {
-        scale: 2,
-        useCORS: true,
-        allowTaint: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: target.scrollWidth,
-      });
-
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      const pdf = new jsPDFClass('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth(); // 210mm
-      const pdfHeight = pdf.internal.pageSize.getHeight(); // 297mm
-      
-      const imgProps = pdf.getImageProperties(imgData);
-      const imgHeight = (imgProps.height * pdfWidth) / imgProps.width;
-
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      // Add first page
-      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight, undefined, 'FAST');
-      heightLeft -= pdfHeight;
-
-      // Add subsequent pages if content exceeds 1 page
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight, undefined, 'FAST');
-        heightLeft -= pdfHeight;
-      }
-
       const todayStr = new Date().toISOString().slice(0, 10);
       const cleanStoreName = (profile.store_name || 'tokoberkah')
         .toLowerCase()
         .replace(/[^a-z0-9]/g, '_');
-      
-      pdf.save(`katalog_${cleanStoreName}_${todayStr}.pdf`);
+      const filename = `katalog_${cleanStoreName}_${todayStr}.pdf`;
+
+      // 1. Attempt client-side html2pdf via CDN if available
+      try {
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js');
+        const html2pdf = (window as any).html2pdf;
+        if (typeof html2pdf === 'function') {
+          const opt = {
+            margin: [6, 6, 6, 6],
+            filename,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true, logging: false },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+          };
+          await html2pdf().set(opt).from(target).save();
+          setPdfSuccessNotice(true);
+          setTimeout(() => setPdfSuccessNotice(false), 5000);
+          setIsGeneratingPdf(false);
+          return;
+        }
+      } catch (cdnErr) {
+        console.warn('html2pdf CDN unavailable, switching to browser print dialog:', cdnErr);
+      }
+
+      // 2. Fallback to browser print (users can choose "Save as PDF" / "Simpan sebagai PDF")
+      window.print();
       setPdfSuccessNotice(true);
-      setTimeout(() => setPdfSuccessNotice(false), 5000);
+      setTimeout(() => setPdfSuccessNotice(false), 4000);
     } catch (err: any) {
       console.error('Error generating catalog PDF:', err);
-      setPdfError(err.message || 'Gagal membuat file PDF. Anda juga dapat menggunakan tombol Cetak.');
+      window.print();
     } finally {
       setIsGeneratingPdf(false);
     }
