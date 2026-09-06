@@ -1,5 +1,5 @@
 import React from 'react';
-import { Database, AlertTriangle, RefreshCw, Settings } from 'lucide-react';
+import { Database, AlertTriangle, RefreshCw, Settings, FileText } from 'lucide-react';
 import { StoreWallet, StoreProfile } from '../types';
 import { formatRupiah } from '../lib/utils';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -13,6 +13,7 @@ interface HeaderProps {
   lowStockCount: number;
   storeProfile?: StoreProfile;
   onOpenStoreSettings?: () => void;
+  onOpenCatalog?: () => void;
   kasTokoState?: number;
   kasTokoDetails?: {
     initialCash: number;
@@ -33,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   lowStockCount,
   storeProfile,
   onOpenStoreSettings,
+  onOpenCatalog,
   kasTokoState,
   kasTokoDetails,
   onNavigateToLaporan,
@@ -71,6 +73,19 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center space-x-2 sm:space-x-3">
         {/* PWA Install Button / Desktop Mode Badge */}
         <PWAInstallButton />
+
+        {/* Catalog PDF Download & Print Button */}
+        {onOpenCatalog && (
+          <button
+            type="button"
+            onClick={onOpenCatalog}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50/80 hover:bg-emerald-100/80 border border-emerald-200 text-[#1B5E20] text-xs font-semibold transition-all cursor-pointer active:scale-95 shadow-2xs"
+            title="Download & Cetak Katalog Produk PDF"
+          >
+            <FileText className="w-3.5 h-3.5 text-[#2E7D32]" />
+            <span className="hidden sm:inline">Katalog PDF</span>
+          </button>
+        )}
 
         {/* Store Profile & Receipt Settings Trigger Button */}
         {onOpenStoreSettings && (
