@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   X, 
   Printer, 
@@ -128,12 +128,29 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
     }));
   }, [filteredProducts]);
 
+  // Keyboard shortcut: Escape to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
-  // Print function using browser print
-  const handlePrint = () => {
+  // Print function using browser print (CSS @media print will print only the catalog content)
+  const handlePrintCatalog = () => {
     window.print();
   };
+  const handlePrint = handlePrintCatalog;
 
   // Download PDF via client-side html2pdf or native print dialog (no bundler imports to guarantee zero build errors)
   const handleDownloadPdf = async () => {
@@ -194,8 +211,16 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="bg-white rounded-3xl max-w-5xl w-full flex flex-col shadow-2xl overflow-hidden my-4 max-h-[95vh] border border-gray-100 animate-in zoom-in-95 duration-150">
+    <div 
+      id="catalog-modal-backdrop"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150 print:bg-white print:p-0 print:static print:overflow-visible print:block"
+    >
+      <div 
+        id="catalog-modal-container"
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-3xl max-w-5xl w-full flex flex-col shadow-2xl overflow-hidden my-4 max-h-[95vh] border border-gray-100 animate-in zoom-in-95 duration-150 print:shadow-none print:border-none print:max-h-none print:my-0 print:rounded-none print:overflow-visible"
+      >
         
         {/* Top Navigation & Action Controls (Hidden on physical print) */}
         <div className="no-print bg-[#1B5E20] text-white px-5 sm:px-6 py-4 flex items-center justify-between shrink-0 shadow-md">
@@ -217,6 +242,7 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
           </div>
 
           <button
+            id="btn-close-catalog-x"
             type="button"
             onClick={onClose}
             aria-label="Tutup katalog"
@@ -304,8 +330,9 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
           <div className="flex items-center gap-2 ml-auto">
             {/* Print Button */}
             <button
+              id="btn-print-catalog-top"
               type="button"
-              onClick={handlePrint}
+              onClick={handlePrintCatalog}
               className="px-3.5 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-100 text-gray-800 font-semibold flex items-center gap-1.5 shadow-2xs transition-all active:scale-[0.98] cursor-pointer"
             >
               <Printer className="w-4 h-4 text-gray-600" />
@@ -349,12 +376,12 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
         )}
 
         {/* Document Preview Pane (Scrollable on screen, Full width on print) */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-[#e9ebe9]/60">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-[#e9ebe9]/60 print:p-0 print:bg-white print:overflow-visible">
           {/* Printable Document Container */}
           <div 
             id="printable-catalog"
             ref={printRef}
-            className="printable-catalog bg-white max-w-[800px] mx-auto p-6 sm:p-10 shadow-lg sm:rounded-2xl border border-gray-200 text-gray-900"
+            className="printable-catalog bg-white max-w-[800px] mx-auto p-6 sm:p-10 shadow-lg sm:rounded-2xl border border-gray-200 text-gray-900 print:shadow-none print:border-none print:p-0 print:max-w-full print:mx-0"
           >
             {/* Header: Store Info, Logo, Title & Date */}
             <div className="border-b-2 border-[#1B5E20] pb-5 mb-6">
@@ -609,6 +636,7 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
           </p>
           <div className="flex items-center gap-2 ml-auto">
             <button
+              id="btn-close-catalog-footer"
               type="button"
               onClick={onClose}
               className="px-4 py-2 rounded-xl border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
@@ -616,8 +644,9 @@ export const KatalogModal: React.FC<KatalogModalProps> = ({
               Tutup
             </button>
             <button
+              id="btn-print-catalog-bottom"
               type="button"
-              onClick={handlePrint}
+              onClick={handlePrintCatalog}
               className="px-4 py-2 rounded-xl border border-[#2E7D32] text-[#1B5E20] hover:bg-emerald-50 text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Printer className="w-4 h-4" />
