@@ -13,17 +13,20 @@ import {
   Clock, 
   FileText,
   AlertCircle,
-  MessageCircle
+  MessageCircle,
+  Trash2
 } from 'lucide-react';
 import { Sale, SaleItem } from '../../types';
 import { formatRupiah, formatDateTime, formatStock, formatStockWithAlias } from '../../lib/utils';
 import { supabase } from '../../lib/supabase';
+import { deleteSaleItem } from '../../services/api';
 
 interface DetailStrukModalProps {
   isOpen: boolean;
   onClose: () => void;
   sale: Sale | null;
   onPrintReceipt: (sale: Sale) => void;
+  onSaleUpdated?: (updatedSale: Sale) => void;
 }
 
 export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
@@ -31,11 +34,18 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
   onClose,
   sale,
   onPrintReceipt,
+  onSaleUpdated,
 }) => {
   const [copied, setCopied] = useState(false);
   const [loadedItems, setLoadedItems] = useState<SaleItem[]>([]);
+  const [currentSale, setCurrentSale] = useState<Sale | null>(sale);
+  const [itemToDelete, setItemToDelete] = useState<SaleItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [restoreStock, setRestoreStock] = useState(true);
+  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
+    setCurrentSale(sale);
     if (!sale) {
       setLoadedItems([]);
       return;
@@ -152,19 +162,86 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
 
   if (!isOpen || !sale) return null;
 
-  const items = loadedItems.length > 0 ? loadedItems : (sale.items || sale.sale_items || []);
-  const isUtang = sale.payment_method === 'UTANG' || sale.status === 'unpaid';
-  const totalQty = items.reduce((acc, it) => acc + (Number(it.qty_kg) || 1), 0);
+  const activeSale = currentSale || sale;
+  const items = loadedItems.length > 0 ? loadedItems : (activeSale.items || activeSale.sale_items || []);
+  const isUtang = activeSale.payment_method === 'UTANG' || activeSale.status === 'unpaid';
+  const totalQty = items.reduce((acc, it) => acc + (Number(it.qty_kg ?? it.qty ?? it.original_qty) || 1), 0);
   const totalItemTypes = items.length;
 
-  const onlineOrderMatch = (sale.notes || '').match(/#ORD-(\d+)/i) || (sale.notes || '').match(/ORD-(\d+)/i);
-  const isOnlineOrder = sale.id.startsWith('sale_online_') || Boolean(onlineOrderMatch) || (sale.notes || '').toLowerCase().includes('pesanan online');
-  const displayId = onlineOrderMatch ? `#ORD-${onlineOrderMatch[1]}` : (isOnlineOrder ? `#ORD-${sale.id.replace('sale_online_', '').slice(0, 5)}` : `#${sale.id.slice(0, 8).toUpperCase()}`);
+  const onlineOrderMatch = (activeSale.notes || '').match(/#ORD-(\d+)/i) || (activeSale.notes || '').match(/ORD-(\d+)/i);
+  const isOnlineOrder = activeSale.id.startsWith('sale_online_') || Boolean(onlineOrderMatch) || (activeSale.notes || '').toLowerCase().includes('pesanan online');
+  const displayId = onlineOrderMatch ? `#ORD-${onlineOrderMatch[1]}` : (isOnlineOrder ? `#ORD-${activeSale.id.replace('sale_online_', '').slice(0, 5)}` : `#${activeSale.id.slice(0, 8).toUpperCase()}`);
 
   const handleCopyId = () => {
     navigator.clipboard.writeText(displayId);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleConfirmDeleteItem = async () => {
+    if (!activeSale || !itemToDelete) return;
+    setIsDeleting(true);
+    try {
+      const rawQty = itemToDelete.qty_kg ?? itemToDelete.qty ?? itemToDelete.original_qty ?? 1;
+      const actualQty = Number(rawQty) || 1;
+      const actualSubtotal = Number(itemToDelete.subtotal) || 0;
+      const productId = itemToDelete.product_id || itemToDelete.product?.id || '';
+
+      const res = await deleteSaleItem(
+        activeSale.id,
+        itemToDelete.id,
+        productId,
+        actualQty,
+        actualSubtotal,
+        restoreStock
+      );
+
+      if (res.success) {
+        // Filter item dari daftar item modal
+        const updatedItems = items.filter(it => 
+          !((itemToDelete.id && it.id === itemToDelete.id) || (productId && (it.product_id === productId || it.product?.id === productId)))
+        );
+        setLoadedItems(updatedItems);
+
+        const newTotal = Math.max(0, (activeSale.total_amount || 0) - actualSubtotal);
+        const updatedSaleObj: Sale = res.updatedSale || {
+          ...activeSale,
+          total_amount: newTotal,
+          items: updatedItems,
+          sale_items: updatedItems,
+        };
+        setCurrentSale(updatedSaleObj);
+
+        if (onSaleUpdated) {
+          onSaleUpdated(updatedSaleObj);
+        }
+
+        const unitDisplay = itemToDelete.unit || itemToDelete.product?.unit || 'satuan';
+        setNotification({
+          type: 'success',
+          message: `Item "${res.deletedItemName || itemToDelete.product?.name || 'Produk'}" berhasil dihapus dari transaksi.${
+            restoreStock ? ` Stok toko bertambah +${res.restoredQty || actualQty} ${res.restoredUnit || unitDisplay}.` : ''
+          }`
+        });
+
+        setItemToDelete(null);
+        setTimeout(() => {
+          setNotification(null);
+        }, 5000);
+      } else {
+        setNotification({
+          type: 'error',
+          message: res.error || 'Gagal menghapus item dari transaksi.'
+        });
+      }
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: err.message || 'Terjadi kesalahan sistem saat menghapus item.'
+      });
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const getPaymentBadge = (method: string) => {
@@ -205,7 +282,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
     };
   };
 
-  const paymentBadge = getPaymentBadge(sale.payment_method);
+  const paymentBadge = getPaymentBadge(activeSale.payment_method);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200">
@@ -236,7 +313,32 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto space-y-5 text-gray-700 text-sm">
+        <div className="p-6 overflow-y-auto space-y-5 text-gray-700 text-sm relative">
+          {/* Notification Banner */}
+          {notification && (
+            <div className={`p-3 rounded-2xl text-xs flex items-center justify-between gap-2 transition-all ${
+              notification.type === 'success' 
+                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs' 
+                : 'bg-red-50 text-red-800 border border-red-200 shadow-2xs'
+            }`}>
+              <div className="flex items-center gap-2">
+                {notification.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                )}
+                <span className="font-medium">{notification.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNotification(null)}
+                className="p-1 hover:bg-black/5 rounded-md cursor-pointer text-gray-500 hover:text-gray-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Metadata Card */}
           <div className="bg-gray-50/80 rounded-2xl p-4 border border-gray-200/70 space-y-3">
             <div className="flex items-center justify-between text-xs pb-2.5 border-b border-gray-200/80">
@@ -263,7 +365,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
                   Waktu Transaksi
                 </span>
                 <span className="font-semibold text-gray-800 block">
-                  {formatDateTime(sale.created_at)}
+                  {formatDateTime(activeSale.created_at)}
                 </span>
               </div>
 
@@ -293,7 +395,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
                   Pelanggan / Catatan
                 </span>
                 <span className="font-semibold text-gray-800 block truncate">
-                  {sale.notes || sale.customer_name || 'Pelanggan Umum'}
+                  {activeSale.notes || activeSale.customer_name || 'Pelanggan Umum'}
                 </span>
               </div>
             </div>
@@ -316,26 +418,29 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
                 <thead className="bg-gray-50 text-gray-700 font-semibold border-b border-gray-200">
                   <tr>
                     <th className="px-3.5 py-2.5">Produk</th>
-                    <th className="px-2.5 py-2.5 text-center">Qty / Satuan</th>
-                    <th className="px-2.5 py-2.5 text-right">Harga</th>
-                    <th className="px-3.5 py-2.5 text-right">Subtotal</th>
+                    <th className="px-2 py-2.5 text-center">Qty / Satuan</th>
+                    <th className="px-2 py-2.5 text-right">Harga</th>
+                    <th className="px-3 py-2.5 text-right">Subtotal</th>
+                    <th className="px-2 py-2.5 text-center w-12">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {items.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="p-4 text-center text-gray-400">
-                        Tidak ada rincian item produk tersimpan pada transaksi ini.
+                      <td colSpan={5} className="p-5 text-center text-gray-400">
+                        Tidak ada item tersisa pada transaksi ini (Total Rp 0).
                       </td>
                     </tr>
                   ) : (
                     items.map((item, idx) => {
                       const prodName = item.product?.name || 'Barang Sembako';
                       const unit = item.unit || item.product?.unit || 'kg';
-                      const unitPrice = item.product?.selling_price || (item.qty_kg > 0 ? item.subtotal / item.qty_kg : item.subtotal);
+                      const rawQty = item.qty_kg ?? item.qty ?? item.original_qty ?? 1;
+                      const itemQty = Number(rawQty) || 1;
+                      const unitPrice = item.product?.selling_price || (itemQty > 0 ? item.subtotal / itemQty : item.subtotal);
                       
                       return (
-                        <tr key={idx} className="hover:bg-gray-50/70 transition-colors">
+                        <tr key={item.id || idx} className="hover:bg-gray-50/70 transition-colors">
                           <td className="px-3.5 py-2.5">
                             <div className="flex items-center gap-2">
                               {item.product?.image_url ? (
@@ -361,14 +466,24 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
                               </div>
                             </div>
                           </td>
-                          <td className="px-2.5 py-2.5 text-center font-medium text-gray-700 whitespace-nowrap">
-                            {formatStockWithAlias(item.qty_kg, unit)}
+                          <td className="px-2 py-2.5 text-center font-medium text-gray-700 whitespace-nowrap">
+                            {formatStockWithAlias(itemQty, unit)}
                           </td>
-                          <td className="px-2.5 py-2.5 text-right text-gray-500 font-mono whitespace-nowrap">
+                          <td className="px-2 py-2.5 text-right text-gray-500 font-mono whitespace-nowrap">
                             {formatRupiah(unitPrice)}
                           </td>
-                          <td className="px-3.5 py-2.5 text-right font-bold font-mono text-gray-900 whitespace-nowrap">
+                          <td className="px-3 py-2.5 text-right font-bold font-mono text-gray-900 whitespace-nowrap">
                             {formatRupiah(item.subtotal)}
+                          </td>
+                          <td className="px-2 py-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setItemToDelete(item)}
+                              title={`Hapus ${prodName} dari transaksi`}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </td>
                         </tr>
                       );
@@ -383,25 +498,25 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
           <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-100 space-y-2">
             <div className="flex justify-between items-center text-xs text-gray-600">
               <span>Subtotal Pembelian:</span>
-              <span className="font-mono font-medium">{formatRupiah(sale.total_amount)}</span>
+              <span className="font-mono font-medium">{formatRupiah(activeSale.total_amount)}</span>
             </div>
 
             <div className="flex justify-between items-center text-sm font-bold text-gray-900 pt-1 border-t border-emerald-200/60">
               <span className="text-gray-900">TOTAL BELANJA:</span>
               <span className="text-base text-[#1B5E20] font-mono">
-                {formatRupiah(sale.total_amount)}
+                {formatRupiah(activeSale.total_amount)}
               </span>
             </div>
 
-            {sale.cash_received !== undefined && sale.cash_received > 0 && (
+            {activeSale.cash_received !== undefined && activeSale.cash_received > 0 && (
               <div className="pt-2 border-t border-dashed border-emerald-200/80 space-y-1 text-xs">
                 <div className="flex justify-between text-gray-700">
                   <span>Tunai Diterima:</span>
-                  <span className="font-mono font-semibold">{formatRupiah(sale.cash_received)}</span>
+                  <span className="font-mono font-semibold">{formatRupiah(activeSale.cash_received)}</span>
                 </div>
                 <div className="flex justify-between text-[#1B5E20] font-semibold">
                   <span>Uang Kembalian:</span>
-                  <span className="font-mono">{formatRupiah(sale.change_amount || 0)}</span>
+                  <span className="font-mono">{formatRupiah(activeSale.change_amount || 0)}</span>
                 </div>
               </div>
             )}
@@ -430,7 +545,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
             type="button"
             onClick={() => {
               onPrintReceipt({
-                ...sale,
+                ...activeSale,
                 items: items,
                 sale_items: items,
               });
@@ -444,7 +559,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
             type="button"
             onClick={() => {
               onPrintReceipt({
-                ...sale,
+                ...activeSale,
                 items: items,
                 sale_items: items,
               });
@@ -455,6 +570,110 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
             <span>Cetak Ulang</span>
           </button>
         </div>
+
+        {/* Confirmation Modal: Delete Sale Item */}
+        {itemToDelete && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full p-5 shadow-2xl border border-gray-100 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-bold text-gray-900 text-base">Hapus Item dari Transaksi?</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Item ini akan dihapus dari riwayat nota transaksi <strong>{displayId}</strong>.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-gray-50/90 rounded-2xl p-3.5 border border-gray-200 text-xs space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Nama Produk:</span>
+                  <span className="font-semibold text-gray-900 text-right max-w-[200px] truncate">
+                    {itemToDelete.product?.name || 'Produk Sembako'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Kuantitas:</span>
+                  <span className="font-medium text-gray-800">
+                    {formatStockWithAlias(
+                      Number(itemToDelete.qty_kg ?? itemToDelete.qty ?? itemToDelete.original_qty ?? 1),
+                      itemToDelete.unit || itemToDelete.product?.unit || 'satuan'
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Subtotal Item:</span>
+                  <span className="font-mono font-bold text-red-600">
+                    - {formatRupiah(itemToDelete.subtotal)}
+                  </span>
+                </div>
+                <div className="pt-2 border-t border-gray-200 flex justify-between items-center font-bold">
+                  <span className="text-gray-700">Total Transaksi Baru:</span>
+                  <span className="font-mono text-emerald-700 text-sm">
+                    {formatRupiah(Math.max(0, (activeSale.total_amount || 0) - (itemToDelete.subtotal || 0)))}
+                  </span>
+                </div>
+              </div>
+
+              {/* Checkbox Restock */}
+              <label className="flex items-start gap-2.5 p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200 cursor-pointer select-none hover:bg-emerald-50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={restoreStock}
+                  onChange={(e) => setRestoreStock(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded text-[#2E7D32] focus:ring-[#2E7D32] border-gray-300 cursor-pointer"
+                />
+                <div className="text-xs">
+                  <span className="font-bold text-emerald-900 block">Kembalikan Stok Produk</span>
+                  <span className="text-emerald-700 text-[11px] leading-relaxed">
+                    Kuantitas barang ({formatStockWithAlias(
+                      Number(itemToDelete.qty_kg ?? itemToDelete.qty ?? itemToDelete.original_qty ?? 1),
+                      itemToDelete.unit || itemToDelete.product?.unit || 'satuan'
+                    )}) akan dikembalikan ke stok etalase toko.
+                  </span>
+                </div>
+              </label>
+
+              {items.length === 1 && (
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span>Ini adalah barang terakhir dalam transaksi ini. Total belanja transaksi akan menjadi Rp 0.</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setItemToDelete(null)}
+                  className="px-4 py-2.5 rounded-xl border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={handleConfirmDeleteItem}
+                  className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
+                >
+                  {isDeleting ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Menghapus...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Hapus Item</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
