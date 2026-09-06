@@ -8,6 +8,7 @@ import { UtangView } from './components/Utang/UtangView';
 import { LaporanView } from './components/Laporan/LaporanView';
 import { EditStoreProfileModal } from './components/EditStoreProfileModal';
 import { KatalogModal } from './components/Katalog/KatalogModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { 
   ActiveTab, 
   Product, 
@@ -246,10 +247,10 @@ export default function App() {
 
   const [cartCount, setCartCount] = useState<number>(0);
 
-  // Derived Badges Counters
-  const lowStockCount = products.filter((p) => p.stock_kg <= (p.min_stock || 10)).length;
-  const pendingOrdersCount = orders.filter((o) => o.status === 'PENDING').length;
-  const unpaidDebtsCount = debts.filter((d) => d.status !== 'paid').length;
+  // Derived Badges Counters (Safe with null-checks)
+  const lowStockCount = (products || []).filter((p) => p && Number(p.stock_kg || 0) <= (p.min_stock || 10)).length;
+  const pendingOrdersCount = (orders || []).filter((o) => o && o.status === 'PENDING').length;
+  const unpaidDebtsCount = (debts || []).filter((d) => d && d.status !== 'paid').length;
 
   // Real-time Kas Toko (Total Uang Fisik Aktual Laci)
   // Formula: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
@@ -318,103 +319,111 @@ export default function App() {
           </div>
         )}
 
-        {/* Main View Area */}
+        {/* Main View Area with ErrorBoundary Protection */}
         <main className="flex-1 pb-20 md:pb-6">
-          {initialLoading ? (
-            <div className="min-h-[50vh] flex flex-col items-center justify-center p-8 text-center">
-              <div className="w-12 h-12 rounded-2xl bg-[#2E7D32] flex items-center justify-center text-white shadow-lg animate-pulse mb-4">
-                <RefreshCw className="w-6 h-6 animate-spin" />
+          <ErrorBoundary
+            fallbackTitle="Terjadi Kendala pada Tampilan"
+            onReset={() => {
+              setActiveTab('kasir');
+              loadAllData(false);
+            }}
+          >
+            {initialLoading ? (
+              <div className="min-h-[50vh] flex flex-col items-center justify-center p-8 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-[#2E7D32] flex items-center justify-center text-white shadow-lg animate-pulse mb-4">
+                  <RefreshCw className="w-6 h-6 animate-spin" />
+                </div>
+                <h3 className="font-bold text-gray-800 text-lg">Memuat {storeProfile.store_name} POS...</h3>
+                <p className="text-xs text-gray-500 mt-1">Menghubungkan ke Supabase Database</p>
               </div>
-              <h3 className="font-bold text-gray-800 text-lg">Memuat {storeProfile.store_name} POS...</h3>
-              <p className="text-xs text-gray-500 mt-1">Menghubungkan ke Supabase Database</p>
-            </div>
-          ) : (
-            <>
-              {activeTab === 'kasir' && (
-                <KasirView
-                  products={products}
-                  onRefreshProducts={async () => {
-                    const prods = await fetchProducts();
-                    setProducts(prods);
-                  }}
-                  onSaleCompleted={(newSale) => {
-                    if (newSale) {
-                      setSales((prev) => {
-                        if (prev.some((s) => s.id === newSale.id)) return prev;
-                        return [newSale, ...prev];
-                      });
-                    }
-                    loadAllData(false);
-                  }}
-                  storeProfile={storeProfile}
-                  onUpdateStoreProfile={setStoreProfile}
-                  onCartCountChange={setCartCount}
-                />
-              )}
+            ) : (
+              <>
+                {activeTab === 'kasir' && (
+                  <KasirView
+                    products={products}
+                    onRefreshProducts={async () => {
+                      const prods = await fetchProducts();
+                      setProducts(prods);
+                    }}
+                    onSaleCompleted={(newSale) => {
+                      if (newSale) {
+                        setSales((prev) => {
+                          if (prev.some((s) => s.id === newSale.id)) return prev;
+                          return [newSale, ...prev];
+                        });
+                      }
+                      loadAllData(false);
+                    }}
+                    storeProfile={storeProfile}
+                    onUpdateStoreProfile={setStoreProfile}
+                    onCartCountChange={setCartCount}
+                  />
+                )}
 
-              {activeTab === 'stok' && (
-                <StokView
-                  products={products}
-                  storeProfile={storeProfile}
-                  onRefresh={async () => {
-                    const prods = await fetchProducts();
-                    setProducts(prods);
-                  }}
-                />
-              )}
+                {activeTab === 'stok' && (
+                  <StokView
+                    products={products}
+                    storeProfile={storeProfile}
+                    onRefresh={async () => {
+                      const prods = await fetchProducts();
+                      setProducts(prods);
+                    }}
+                  />
+                )}
 
-              {activeTab === 'pesanan' && (
-                <PesananView
-                  orders={orders}
-                  products={products}
-                  onRefresh={async () => {
-                    const [ords, prods, s] = await Promise.all([
-                      fetchOrders(),
-                      fetchProducts(),
-                      fetchSales(),
-                    ]);
-                    setOrders(ords);
-                    setProducts(prods);
-                    setSales(s);
-                  }}
-                  notificationPermission={notifPermission}
-                  onRequestPermission={handleRequestPermission}
-                />
-              )}
+                {activeTab === 'pesanan' && (
+                  <PesananView
+                    orders={orders}
+                    products={products}
+                    onRefresh={async () => {
+                      const [ords, prods, s] = await Promise.all([
+                        fetchOrders(),
+                        fetchProducts(),
+                        fetchSales(),
+                      ]);
+                      setOrders(ords);
+                      setProducts(prods);
+                      setSales(s);
+                    }}
+                    notificationPermission={notifPermission}
+                    onRequestPermission={handleRequestPermission}
+                  />
+                )}
 
-              {activeTab === 'utang' && (
-                <UtangView
-                  debts={debts}
-                  onRefresh={async () => {
-                    const d = await fetchDebtsCredits();
-                    setDebts(d);
-                  }}
-                />
-              )}
+                {activeTab === 'utang' && (
+                  <UtangView
+                    debts={debts}
+                    onRefresh={async () => {
+                      const d = await fetchDebtsCredits();
+                      setDebts(d);
+                    }}
+                  />
+                )}
 
-              {activeTab === 'laporan' && (
-                <LaporanView
-                  sales={sales}
-                  expenses={expenses}
-                  wallet={wallet}
-                  onRefresh={async () => {
-                    await loadAllData(false);
-                  }}
-                  onExpenseCreated={(newExp) => {
-                    setExpenses((prev) => [newExp, ...prev]);
-                  }}
-                  onExpenseDeleted={(id) => {
-                    setExpenses((prev) => prev.filter((e) => e.id !== id));
-                  }}
-                  onWalletUpdated={(w) => {
-                    setWallet(w);
-                  }}
-                  storeProfile={storeProfile}
-                  onUpdateStoreProfile={setStoreProfile}
-                />
-              )}
-            </>
-          )}
+                {activeTab === 'laporan' && (
+                  <LaporanView
+                    sales={sales}
+                    expenses={expenses}
+                    wallet={wallet}
+                    onRefresh={async () => {
+                      await loadAllData(false);
+                    }}
+                    onExpenseCreated={(newExp) => {
+                      setExpenses((prev) => [newExp, ...prev]);
+                    }}
+                    onExpenseDeleted={(id) => {
+                      setExpenses((prev) => prev.filter((e) => e.id !== id));
+                    }}
+                    onWalletUpdated={(w) => {
+                      setWallet(w);
+                    }}
+                    storeProfile={storeProfile}
+                    onUpdateStoreProfile={setStoreProfile}
+                  />
+                )}
+              </>
+            )}
+          </ErrorBoundary>
         </main>
 
         {/* Clean Minimalism Bottom Status Bar */}
