@@ -26,6 +26,7 @@ import { Product, CartItem, Sale, SaleItem, StoreProfile } from '../../types';
 import { formatRupiah, playBeep, formatStock, roundStock, formatStockWithAlias, getWeightAlias } from '../../lib/utils';
 import { processSale } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 // Helper for quick quantity presets based on product measurement unit
 const getQuickPresets = (unit?: string) => {
@@ -131,7 +132,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
   const [receiptData, setReceiptData] = useState<{
     isOpen: boolean;
     saleId: string;
-    items: CartItem[];
+    items: any[];
     totalAmount: number;
     cashReceived?: number;
     changeAmount?: number;
@@ -145,6 +146,9 @@ export const KasirView: React.FC<KasirViewProps> = ({
     totalAmount: 0,
     paymentMethod: 'CASH',
   });
+
+  // Success Notification Toast (e.g. Transaksi Utang Berhasil Disimpan)
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Extract categories
   const categories = useMemo(() => {
@@ -453,11 +457,10 @@ export const KasirView: React.FC<KasirViewProps> = ({
       }
     }
 
-    if (activeMethod === 'UTANG' && !customerName.trim()) {
-      setCheckoutError('Harap isi nama pelanggan untuk pencatatan buku utang!');
-      playBeep('alert');
-      return;
-    }
+    // Safe fallback customer name for UTANG
+    const trimmedCustomerName = (customerName || '').trim();
+    const finalCustomerName = trimmedCustomerName || (activeMethod === 'UTANG' ? 'Pelanggan Utang' : undefined);
+    const finalCustomerPhone = (customerPhone || '').trim() || undefined;
 
     try {
       setIsSubmitting(true);
@@ -465,20 +468,22 @@ export const KasirView: React.FC<KasirViewProps> = ({
 
       const receiptCash = activeMethod === 'CASH' ? effectiveCash : undefined;
       const receiptChange = activeMethod === 'CASH' ? Math.max(0, effectiveCash - totalAmount) : undefined;
+      const currentCart = [...(cart || [])];
+      const receiptTotal = totalAmount || 0;
 
       const result = await processSale({
-        total_amount: totalAmount,
+        total_amount: receiptTotal,
         payment_method: activeMethod,
         notes: notes || undefined,
-        customer_name: customerName || undefined,
-        customer_phone: customerPhone || undefined,
+        customer_name: finalCustomerName,
+        customer_phone: finalCustomerPhone,
         debt_due_date: debtDueDate || undefined,
         cash_received: receiptCash,
         change_amount: receiptChange,
-        items: cart,
+        items: currentCart,
       });
 
-      // Confetti & Audio
+      // Confetti & Audio Feedback
       try {
         confetti({
           particleCount: 50,
@@ -491,42 +496,69 @@ export const KasirView: React.FC<KasirViewProps> = ({
       }
       playBeep('success');
 
-      // Save for receipt
-      const currentCart = [...cart];
-      const receiptTotal = totalAmount;
-      const savedCustomerName = customerName || undefined;
-      const savedCustomerPhone = customerPhone || undefined;
-
-      // Close checkout and mobile cart
+      // 1. Reset State & Navigasi Mulus
+      // a. Tutup checkout modal & drawer keranjang mobile
       setIsCheckoutModalOpen(false);
       setIsMobileCartOpen(false);
+
+      // b. Kosongkan keranjang belanja kasir
       setCart([]);
+
+      // c. Reset form pelanggan dan modal pembayaran utang
       setCashGiven('');
       setCustomerName('');
       setCustomerPhone('');
       setNotes('');
       setDebtDueDate('');
+      setPaymentMethod('CASH');
 
-      // Open Receipt Modal
+      // 2. Safe parsing & fallback default values for Receipt Modal
+      const safeSale = result?.sale;
+      const safeSaleId = safeSale?.id || `bon_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const safeCustomerName = safeSale?.customer_name || finalCustomerName || (activeMethod === 'UTANG' ? 'Pelanggan Utang' : undefined);
+      const safeCustomerPhone = safeSale?.customer_phone || finalCustomerPhone;
+      const safeItems = Array.isArray(safeSale?.items) && safeSale.items.length > 0 
+        ? safeSale.items 
+        : currentCart;
+
+      // 3. Notification toast for Utang
+      if (activeMethod === 'UTANG') {
+        setToastMessage('Transaksi Utang Berhasil Disimpan');
+        setTimeout(() => setToastMessage(null), 4500);
+      }
+
+      // 4. Open Receipt Modal with guaranteed non-null fields
       setReceiptData({
         isOpen: true,
-        saleId: result.sale.id,
-        items: currentCart,
-        totalAmount: receiptTotal,
+        saleId: safeSaleId,
+        items: safeItems || [],
+        totalAmount: Number(safeSale?.total_amount ?? receiptTotal),
         cashReceived: receiptCash,
         changeAmount: receiptChange,
         paymentMethod: activeMethod,
-        customerName: savedCustomerName,
-        customerPhone: savedCustomerPhone,
+        customerName: safeCustomerName,
+        customerPhone: safeCustomerPhone,
       });
 
-      // Refresh product stocks
-      await onRefreshProducts();
-      if (onSaleCompleted) onSaleCompleted(result.sale);
+      // 5. Refresh product stocks safely
+      try {
+        await onRefreshProducts();
+      } catch (refreshErr) {
+        console.warn('Silent refresh error:', refreshErr);
+      }
+
+      // 6. Notify parent component safely
+      if (onSaleCompleted && safeSale) {
+        try {
+          onSaleCompleted(safeSale);
+        } catch (completeErr) {
+          console.warn('onSaleCompleted handler note:', completeErr);
+        }
+      }
 
     } catch (err: any) {
       console.error('Checkout error:', err);
-      setCheckoutError(err.message || 'Terjadi kesalahan saat memproses transaksi ke Supabase');
+      setCheckoutError(err?.message || 'Terjadi kesalahan saat memproses transaksi.');
       playBeep('alert');
     } finally {
       setIsSubmitting(false);
@@ -2019,7 +2051,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
               <button
                 type="button"
                 disabled={isSubmitting}
-                onClick={handleProcessCheckout}
+                onClick={() => handleProcessCheckout()}
                 className="flex-1 py-2.5 px-4 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
               >
                 {isSubmitting ? (
@@ -2224,21 +2256,43 @@ export const KasirView: React.FC<KasirViewProps> = ({
         </div>
       )}
 
-      {/* Printable Receipt Modal */}
-      <ReceiptModal
-        isOpen={receiptData.isOpen}
-        onClose={() => setReceiptData((prev) => ({ ...prev, isOpen: false }))}
-        saleId={receiptData.saleId}
-        items={receiptData.items}
-        totalAmount={receiptData.totalAmount}
-        cashReceived={receiptData.cashReceived}
-        changeAmount={receiptData.changeAmount}
-        paymentMethod={receiptData.paymentMethod}
-        customerName={receiptData.customerName}
-        customerPhone={receiptData.customerPhone}
-        storeProfile={storeProfile}
-        onUpdateStoreProfile={onUpdateStoreProfile}
-      />
+      {/* Notification Toast (e.g. Transaksi Utang Berhasil Disimpan) */}
+      {toastMessage && (
+        <div className="fixed top-5 right-5 z-50 animate-in slide-in-from-top duration-300">
+          <div className="flex items-center gap-2.5 px-4 py-3 bg-[#1B5E20] text-white rounded-2xl shadow-xl border border-emerald-400/30 text-xs font-semibold">
+            <span className="w-2 h-2 rounded-full bg-emerald-300 animate-ping" />
+            <span>{toastMessage}</span>
+            <button
+              type="button"
+              onClick={() => setToastMessage(null)}
+              className="ml-2 p-0.5 text-emerald-200 hover:text-white rounded-md transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Printable Receipt Modal wrapped in ErrorBoundary */}
+      <ErrorBoundary
+        fallbackTitle="Kendala Menampilkan Struk Transaksi"
+        onReset={() => setReceiptData((prev) => ({ ...prev, isOpen: false }))}
+      >
+        <ReceiptModal
+          isOpen={receiptData.isOpen}
+          onClose={() => setReceiptData((prev) => ({ ...prev, isOpen: false }))}
+          saleId={receiptData.saleId}
+          items={receiptData.items}
+          totalAmount={receiptData.totalAmount}
+          cashReceived={receiptData.cashReceived}
+          changeAmount={receiptData.changeAmount}
+          paymentMethod={receiptData.paymentMethod}
+          customerName={receiptData.customerName}
+          customerPhone={receiptData.customerPhone}
+          storeProfile={storeProfile}
+          onUpdateStoreProfile={onUpdateStoreProfile}
+        />
+      </ErrorBoundary>
     </div>
   );
 };
