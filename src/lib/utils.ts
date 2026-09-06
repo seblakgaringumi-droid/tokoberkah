@@ -467,14 +467,31 @@ export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): stri
   // Rincian Barang
   lines.push(`*RINCIAN BARANG:*`);
   const safeItems = Array.isArray(items) ? items : [];
-  safeItems.forEach((item) => {
+  safeItems.forEach((item: any) => {
     if (!item) return;
-    const prodName = item.product?.name || (item as any).product_name || (item as any).name || 'Produk';
-    const prodSellingPrice = Number(item.product?.selling_price ?? (item as any).price ?? 0);
-    const unitStr = item.unit || item.product?.unit || (item as any).product_unit || 'kg';
-    const qtyAlias = formatStockWithAlias(Number(item.qty || 0), unitStr);
+    const prodName = item.product?.name || item.product_name || item.name || 'Produk';
+    const unitStr = item.unit || item.product?.unit || item.product_unit || 'pcs';
+    const rawQty = item.qty ?? item.quantity ?? item.weight ?? item.qty_kg ?? item.jumlah ?? item.original_qty ?? item.amount;
+    const itemQty = Number(rawQty) || (item.subtotal && item.price ? Number(item.subtotal) / Number(item.price) : 1);
+    const prodSellingPrice = Number(
+      item.product?.selling_price ?? 
+      item.price ?? 
+      item.selling_price ?? 
+      (item.subtotal && itemQty > 0 ? Math.round(item.subtotal / itemQty) : 0)
+    );
+    const isWeightUnit = ['kg', 'kilogram', 'gram', 'gr', 'g', 'ons', 'liter', 'ltr', 'l', 'timbangan'].includes(
+      (unitStr || '').toLowerCase().trim()
+    );
+    const formattedQty = isWeightUnit
+      ? Number(itemQty).toLocaleString('id-ID', {
+          minimumFractionDigits: Number.isInteger(itemQty) ? 0 : 1,
+          maximumFractionDigits: 3,
+        })
+      : itemQty;
+    const alias = getWeightAlias(itemQty, unitStr);
+    const qtyAlias = alias ? `${formattedQty} ${unitStr} (${alias})` : `${formattedQty} ${unitStr}`;
     const unitPrice = formatRupiah(prodSellingPrice);
-    const subtotal = formatRupiah(Number(item.subtotal || (prodSellingPrice * Number(item.qty || 0))));
+    const subtotal = formatRupiah(Number(item.subtotal || (prodSellingPrice * itemQty)));
     lines.push(`• *${prodName}*`);
     lines.push(`  ${qtyAlias} x ${unitPrice} = *${subtotal}*`);
   });
