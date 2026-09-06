@@ -323,6 +323,23 @@ function saveLocalSales(sales: Sale[]) {
   }
 }
 
+export function getLocalDebts(): DebtCredit[] {
+  try {
+    const raw = localStorage.getItem(DEBTS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalDebts(debts: DebtCredit[]) {
+  try {
+    localStorage.setItem(DEBTS_CACHE_KEY, JSON.stringify(debts));
+  } catch (e) {
+    console.warn('Local storage save debts note:', e);
+  }
+}
+
 // ==================== SALES & SALE ITEMS ====================
 
 export interface CheckoutPayload {
@@ -449,22 +466,20 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
 
       // 4. If payment is UTANG, also create record in debts_credits
       if (payload.payment_method === 'UTANG') {
+        const debtPayload = {
+          type: 'PIUTANG',
+          customer_or_supplier_name: payload.customer_name || 'Pelanggan Utang',
+          phone_number: payload.customer_phone || null,
+          total_amount: payload.total_amount,
+          remaining_amount: payload.total_amount,
+          status: 'unpaid' as const,
+          due_date: payload.debt_due_date || null,
+          notes: `Transaksi kasir ${saleData?.id ? saleData.id.slice(0, 8) : tempSaleId.slice(0, 8)}`,
+        };
         try {
-          await supabase
-            .from('debts_credits')
-            .insert([{
-              type: 'PIUTANG',
-              customer_or_supplier_name: payload.customer_name || 'Pelanggan Kasir',
-              phone_number: payload.customer_phone || null,
-              total_amount: payload.total_amount,
-              remaining_amount: payload.total_amount,
-              status: 'unpaid',
-              due_date: payload.debt_due_date || null,
-              sale_id: saleData.id,
-              notes: `Transaksi kasir ${saleData.id.slice(0, 8)}`,
-            }]);
+          await createDebtCredit(debtPayload);
         } catch (debtErr) {
-          console.error('Failed to create debt record:', debtErr);
+          console.warn('Failed to create remote debt record, fallback preserved locally:', debtErr);
         }
       }
     }
@@ -472,7 +487,40 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
     console.warn('processSale Supabase write exception, using local store:', err);
   }
 
-  return { sale: finalSale, items: finalItems };
+  // Guarantee UTANG is preserved in local debts cache even if Supabase had an exception
+  if (payload.payment_method === 'UTANG') {
+    const existingDebts = getLocalDebts();
+    const noteTag = (finalSale?.id || tempSaleId).slice(0, 8);
+    const alreadySaved = existingDebts.some((d) => d && d.notes?.includes(noteTag));
+    if (!alreadySaved) {
+      const fallbackDebt: DebtCredit = {
+        id: `debt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        type: 'PIUTANG',
+        customer_or_supplier_name: payload.customer_name || 'Pelanggan Utang',
+        phone_number: payload.customer_phone || null,
+        total_amount: payload.total_amount,
+        remaining_amount: payload.total_amount,
+        status: 'unpaid',
+        due_date: payload.debt_due_date || null,
+        notes: `Transaksi kasir ${noteTag}`,
+        created_at: new Date().toISOString(),
+      };
+      saveLocalDebts([fallbackDebt, ...existingDebts]);
+    }
+  }
+
+  return {
+    sale: {
+      ...finalSale,
+      id: finalSale?.id || tempSaleId,
+      customer_name: finalSale?.customer_name || payload.customer_name || (payload.payment_method === 'UTANG' ? 'Pelanggan Utang' : undefined),
+      items: finalItems || constructedItems || [],
+      sale_items: finalItems || constructedItems || [],
+      total_amount: Number(finalSale?.total_amount ?? payload.total_amount ?? 0),
+      payment_method: finalSale?.payment_method || payload.payment_method || 'CASH',
+    },
+    items: finalItems || constructedItems || [],
+  };
 }
 
 export async function fetchSales(): Promise<Sale[]> {
@@ -1111,16 +1159,23 @@ export async function createOrder(order: Omit<Order, 'id' | 'created_at'>): Prom
 // ==================== DEBTS & CREDITS ====================
 
 export async function fetchDebtsCredits(): Promise<DebtCredit[]> {
-  const { data, error } = await supabase
-    .from('debts_credits')
-    .select('*')
-    .order('created_at', { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from('debts_credits')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Error fetching debts_credits:', error);
-    throw error;
+    if (error) {
+      console.warn('Error fetching debts_credits from Supabase, using local cache:', error.message);
+      return getLocalDebts();
+    }
+    const safeList = (data || []).filter(Boolean);
+    saveLocalDebts(safeList);
+    return safeList;
+  } catch (err) {
+    console.warn('fetchDebtsCredits exception, fallback to local storage:', err);
+    return getLocalDebts();
   }
-  return data || [];
 }
 
 export async function createDebtCredit(debt: {
@@ -1133,58 +1188,97 @@ export async function createDebtCredit(debt: {
   phone_number?: string | null;
   notes?: string | null;
 }): Promise<DebtCredit> {
-  const { data, error } = await supabase
-    .from('debts_credits')
-    .insert([debt])
-    .select()
-    .single();
+  const localItem: DebtCredit = {
+    id: `debt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    ...debt,
+    created_at: new Date().toISOString(),
+  };
 
-  if (error) {
-    console.error('Error creating debt credit:', error);
-    throw error;
+  const cached = getLocalDebts();
+  saveLocalDebts([localItem, ...cached]);
+
+  try {
+    const { data, error } = await supabase
+      .from('debts_credits')
+      .insert([debt])
+      .select()
+      .single();
+
+    if (!error && data) {
+      const updated = getLocalDebts().map((d) => (d.id === localItem.id ? data : d));
+      saveLocalDebts(updated);
+      return data;
+    }
+  } catch (err) {
+    console.warn('createDebtCredit Supabase write note, stored in local storage:', err);
   }
-  return data;
+  return localItem;
 }
 
 export async function payDebtCredit(id: string, paymentAmount: number): Promise<DebtCredit> {
-  // 1. Fetch current remaining amount
-  const { data: current, error: fetchErr } = await supabase
-    .from('debts_credits')
-    .select('*')
-    .eq('id', id)
-    .single();
-
-  if (fetchErr) throw fetchErr;
-
-  const newRemaining = Math.max(0, Number(current.remaining_amount) - paymentAmount);
+  const cached = getLocalDebts();
+  const currentLocal = cached.find((d) => d.id === id);
+  const currentRemaining = currentLocal ? Number(currentLocal.remaining_amount) : paymentAmount;
+  const newRemaining = Math.max(0, currentRemaining - paymentAmount);
   const newStatus = newRemaining <= 0 ? 'paid' : 'partial';
 
-  const { data, error } = await supabase
-    .from('debts_credits')
-    .update({
-      remaining_amount: newRemaining,
-      status: newStatus,
-    })
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Error recording debt payment:', error);
-    throw error;
+  if (currentLocal) {
+    const updatedLocal = cached.map((d) =>
+      d.id === id ? { ...d, remaining_amount: newRemaining, status: newStatus as any } : d
+    );
+    saveLocalDebts(updatedLocal);
   }
-  return data;
+
+  try {
+    // 1. Fetch current remaining amount from DB
+    const { data: current, error: fetchErr } = await supabase
+      .from('debts_credits')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (!fetchErr && current) {
+      const dbRemaining = Math.max(0, Number(current.remaining_amount) - paymentAmount);
+      const dbStatus = dbRemaining <= 0 ? 'paid' : 'partial';
+
+      const { data, error } = await supabase
+        .from('debts_credits')
+        .update({
+          remaining_amount: dbRemaining,
+          status: dbStatus,
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (!error && data) {
+        const synced = getLocalDebts().map((d) => (d.id === id ? data : d));
+        saveLocalDebts(synced);
+        return data;
+      }
+    }
+  } catch (err) {
+    console.warn('payDebtCredit Supabase update note, recorded in local storage:', err);
+  }
+
+  return currentLocal ? { ...currentLocal, remaining_amount: newRemaining, status: newStatus as any } : ({} as DebtCredit);
 }
 
 export async function deleteDebtCredit(id: string): Promise<void> {
-  const { error } = await supabase
-    .from('debts_credits')
-    .delete()
-    .eq('id', id);
+  const cached = getLocalDebts().filter((d) => d.id !== id);
+  saveLocalDebts(cached);
 
-  if (error) {
-    console.error('Error deleting debt record:', error);
-    throw error;
+  try {
+    const { error } = await supabase
+      .from('debts_credits')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.warn('deleteDebtCredit Supabase note:', error);
+    }
+  } catch (err) {
+    console.warn('deleteDebtCredit exception:', err);
   }
 }
 
