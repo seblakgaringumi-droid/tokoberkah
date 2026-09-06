@@ -418,14 +418,17 @@ export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): stri
   const address = storeProfile?.address || 'Jl. Kalapanunggal I, Sindangkasih, Ciamis';
   const storePhone = storeProfile?.phone || '0852-9499-6696';
 
+  const safeSaleId = String(saleId || `BON-${Date.now().toString().slice(-6)}`);
+  const effectiveCustomerName = customerName || (paymentMethod === 'UTANG' ? 'Pelanggan Utang' : '');
+
   const cleanSaleId = (() => {
     const match =
-      saleId.match(/#ORD-(\d+)/i) ||
-      saleId.match(/ORD-(\d+)/i) ||
-      (customerName || '').match(/#ORD-(\d+)/i);
+      safeSaleId.match(/#ORD-(\d+)/i) ||
+      safeSaleId.match(/ORD-(\d+)/i) ||
+      effectiveCustomerName.match(/#ORD-(\d+)/i);
     if (match) return `#ORD-${match[1]}`;
-    if (saleId.startsWith('sale_online_')) return `#ORD-${saleId.replace('sale_online_', '').slice(0, 5)}`;
-    return saleId.slice(0, 12).toUpperCase();
+    if (safeSaleId.startsWith('sale_online_')) return `#ORD-${safeSaleId.replace('sale_online_', '').slice(0, 5)}`;
+    return safeSaleId.slice(0, 12).toUpperCase();
   })();
 
   const cleanPayment = (() => {
@@ -435,7 +438,7 @@ export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): stri
     if (m === 'QRIS') return 'QRIS';
     if (m === 'TRANSFER') return 'Transfer Bank';
     if (m === 'UTANG') return 'Utang / Bon (Belum Lunas)';
-    return paymentMethod;
+    return paymentMethod || 'Tunai';
   })();
 
   const formattedDate = formatDateTime(date || new Date().toISOString());
@@ -455,20 +458,24 @@ export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): stri
   lines.push(`No. Nota : ${cleanSaleId}`);
   lines.push(`Waktu    : ${formattedDate}`);
   lines.push(`Kasir    : Petugas Shift #01`);
-  if (customerName) {
-    lines.push(`Pelanggan: ${customerName}`);
+  if (effectiveCustomerName) {
+    lines.push(`Pelanggan: ${effectiveCustomerName}`);
   }
   lines.push(`Metode   : ${cleanPayment}`);
   lines.push(divider);
 
   // Rincian Barang
   lines.push(`*RINCIAN BARANG:*`);
-  items.forEach((item) => {
-    const unitStr = item.unit || item.product.unit || 'kg';
-    const qtyAlias = formatStockWithAlias(item.qty, unitStr);
-    const unitPrice = formatRupiah(item.product.selling_price);
-    const subtotal = formatRupiah(item.subtotal);
-    lines.push(`• *${item.product.name}*`);
+  const safeItems = Array.isArray(items) ? items : [];
+  safeItems.forEach((item) => {
+    if (!item) return;
+    const prodName = item.product?.name || (item as any).product_name || (item as any).name || 'Produk';
+    const prodSellingPrice = Number(item.product?.selling_price ?? (item as any).price ?? 0);
+    const unitStr = item.unit || item.product?.unit || (item as any).product_unit || 'kg';
+    const qtyAlias = formatStockWithAlias(Number(item.qty || 0), unitStr);
+    const unitPrice = formatRupiah(prodSellingPrice);
+    const subtotal = formatRupiah(Number(item.subtotal || (prodSellingPrice * Number(item.qty || 0))));
+    lines.push(`• *${prodName}*`);
     lines.push(`  ${qtyAlias} x ${unitPrice} = *${subtotal}*`);
   });
   lines.push(divider);
