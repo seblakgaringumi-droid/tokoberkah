@@ -1848,24 +1848,30 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
           isOpen={!!selectedSaleForReceipt}
           onClose={() => setSelectedSaleForReceipt(null)}
           saleId={selectedSaleForReceipt.id}
-          items={(selectedSaleForReceipt.items || []).map((it) => ({
-            product: it.product || {
-              id: it.product_id,
-              name: 'Barang Sembako',
-              category: 'Sembako',
-              cost_price: it.cost_price || 0,
-              selling_price: it.subtotal / (it.qty_kg || 1),
-              stock_kg: 0,
-              min_stock: 0,
-              is_active: true,
-              image_url: null,
+          items={(selectedSaleForReceipt.items || []).map((it) => {
+            const rawQty = it.qty_kg ?? it.qty ?? it.original_qty ?? 1;
+            const parsedQty = Number(rawQty) || 1;
+            return {
+              product: it.product || {
+                id: it.product_id,
+                name: 'Barang Sembako',
+                category: 'Sembako',
+                cost_price: it.cost_price || 0,
+                selling_price: it.subtotal / parsedQty,
+                stock_kg: 0,
+                min_stock: 0,
+                is_active: true,
+                image_url: null,
+                unit: it.unit || 'kg',
+                barcode: null,
+              },
+              qty: parsedQty,
+              quantity: parsedQty,
+              qty_kg: parsedQty,
               unit: it.unit || 'kg',
-              barcode: null,
-            },
-            qty: it.qty_kg,
-            unit: it.unit || 'kg',
-            subtotal: it.subtotal,
-          }))}
+              subtotal: it.subtotal,
+            };
+          })}
           totalAmount={selectedSaleForReceipt.total_amount}
           cashReceived={selectedSaleForReceipt.cash_received}
           changeAmount={selectedSaleForReceipt.change_amount}
