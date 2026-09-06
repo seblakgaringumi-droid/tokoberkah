@@ -18,6 +18,7 @@ export interface SaleItem {
   sale_id?: string;
   product_id: string;
   qty_kg: number;
+  qty?: number;
   subtotal: number;
   cost_price?: number;
   original_qty?: number;
