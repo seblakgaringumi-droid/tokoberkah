@@ -27,6 +27,7 @@ export const OpnameKasModal: React.FC<OpnameKasModalProps> = ({
   const [newInitialCash, setNewInitialCash] = useState<number | string>(initialCash || 500000);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -35,6 +36,7 @@ export const OpnameKasModal: React.FC<OpnameKasModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage(null);
     try {
       setIsSubmitting(true);
       const newInit = Number(newInitialCash) || countedNum || 500000;
@@ -50,11 +52,10 @@ export const OpnameKasModal: React.FC<OpnameKasModalProps> = ({
       await upsertStoreWallet(walletPayload);
       playBeep('success');
       if (onWalletUpdated) onWalletUpdated(walletPayload);
-      alert(`Opname kas berhasil disimpan! Modal laci baru di-set menjadi ${formatRupiah(newInit)}.`);
       onClose();
       await onRefresh();
     } catch (err: any) {
-      alert(`Gagal menyimpan opname kas: ${err.message}`);
+      setErrorMessage(err.message || 'Gagal menyimpan opname kas.');
     } finally {
       setIsSubmitting(false);
     }
