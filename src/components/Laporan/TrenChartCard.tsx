@@ -1,8 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { BarChart3, TrendingUp, DollarSign, Calendar, Filter, Target } from 'lucide-react';
 import { Sale, Expense } from '../../types';
-import { formatRupiah, formatDate } from '../../lib/utils';
-import { isStockExpense } from './LaporanView';
+import { formatRupiah, formatDate, isStockExpense } from '../../lib/utils';
 
 interface TrenChartCardProps {
   sales: Sale[];
