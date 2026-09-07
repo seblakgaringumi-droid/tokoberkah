@@ -74,6 +74,7 @@ interface KasirViewProps {
   products: Product[];
   onRefreshProducts: () => Promise<void>;
   onSaleCompleted?: (sale?: Sale) => void;
+  onTransactionSuccess?: (sale?: Sale) => void;
   storeProfile?: StoreProfile;
   onUpdateStoreProfile?: (profile: StoreProfile) => void;
   onCartCountChange?: (count: number) => void;
@@ -83,6 +84,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
   products,
   onRefreshProducts,
   onSaleCompleted,
+  onTransactionSuccess,
   storeProfile,
   onUpdateStoreProfile,
   onCartCountChange,
@@ -562,11 +564,20 @@ export const KasirView: React.FC<KasirViewProps> = ({
       }
 
       // 6. Notify parent component safely
-      if (onSaleCompleted && safeSale) {
-        try {
-          onSaleCompleted(safeSale);
-        } catch (completeErr) {
-          console.warn('onSaleCompleted handler note:', completeErr);
+      if (safeSale) {
+        if (onSaleCompleted) {
+          try {
+            onSaleCompleted(safeSale);
+          } catch (completeErr) {
+            console.warn('onSaleCompleted handler note:', completeErr);
+          }
+        }
+        if (onTransactionSuccess) {
+          try {
+            onTransactionSuccess(safeSale);
+          } catch (txErr) {
+            console.warn('onTransactionSuccess handler note:', txErr);
+          }
         }
       }
 
