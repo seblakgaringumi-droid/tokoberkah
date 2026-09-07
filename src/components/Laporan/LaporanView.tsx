@@ -36,10 +36,10 @@ import {
   Clock,
   RefreshCw
 } from 'lucide-react';
-import { Sale, Expense, StoreWallet, StoreProfile } from '../../types';
+import { Sale, Expense, StoreWallet, StoreProfile, DebtPayment } from '../../types';
 import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
 import { useFinance } from '../../context/FinanceContext';
-import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales } from '../../services/api';
+import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
 import { SinkingFundCard } from './SinkingFundCard';
@@ -64,6 +64,7 @@ interface LaporanViewProps {
   expenses: Expense[];
   wallet: StoreWallet | null;
   onRefresh: () => Promise<void>;
+  debtPayments?: DebtPayment[];
   storeProfile?: StoreProfile;
   onUpdateStoreProfile?: (profile: StoreProfile) => void;
   onExpenseCreated?: (expense: Expense) => void;
@@ -77,6 +78,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   expenses,
   wallet,
   onRefresh,
+  debtPayments,
   storeProfile,
   onUpdateStoreProfile,
   onExpenseCreated,
@@ -263,6 +265,38 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     return filteredSales.reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
   }, [filteredSales]);
 
+  // Pelunasan Utang Pelanggan (Buku Utang)
+  const effectiveDebtPayments = useMemo(() => {
+    if (debtPayments && Array.isArray(debtPayments)) {
+      return debtPayments;
+    }
+    return getLocalDebtPayments();
+  }, [debtPayments]);
+
+  const filteredDebtPayments = useMemo(() => {
+    return effectiveDebtPayments.filter((dp) => filterByDate(dp.created_at));
+  }, [effectiveDebtPayments, dateFilter, selectedMonth, selectedYear, customStartDate, customEndDate]);
+
+  const debtPaymentsCash = useMemo(() => {
+    return filteredDebtPayments
+      .filter((dp) => {
+        const m = (dp.payment_method || 'TUNAI').toUpperCase();
+        return m === 'TUNAI' || m === 'CASH';
+      })
+      .reduce((acc, dp) => acc + (Number(dp.amount) || 0), 0);
+  }, [filteredDebtPayments]);
+
+  const debtPaymentsQris = useMemo(() => {
+    return filteredDebtPayments
+      .filter((dp) => {
+        const m = (dp.payment_method || '').toUpperCase();
+        return m === 'QRIS' || m === 'BANK' || m === 'TRANSFER';
+      })
+      .reduce((acc, dp) => acc + (Number(dp.amount) || 0), 0);
+  }, [filteredDebtPayments]);
+
+  const totalDebtPayments = debtPaymentsCash + debtPaymentsQris;
+
   const totalCost = useMemo(() => {
     let cost = 0;
     for (const sale of filteredSales) {
@@ -295,15 +329,16 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
       .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
   }, [filteredSales]);
 
-  // Saldo Transaksi QRIS / Non-Tunai Otomatis dari Penjualan
+  // Saldo Transaksi QRIS / Non-Tunai Otomatis dari Penjualan + Pelunasan QRIS
   const autoQrisSales = useMemo(() => {
-    return filteredSales
+    const qrisFromSales = filteredSales
       .filter((s) => {
         const m = (s.payment_method || '').toUpperCase();
         return m === 'QRIS' || m === 'BANK' || m === 'TRANSFER' || m === 'NON_TUNAI' || m.includes('QRIS') || m.includes('TRANSFER');
       })
       .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
-  }, [filteredSales]);
+    return qrisFromSales + debtPaymentsQris;
+  }, [filteredSales, debtPaymentsQris]);
 
   // Saldo QRIS efektif (menggunakan penyesuaian manual jika diset, atau otomatis dari penjualan)
   const effectiveQrisBalance = manualQrisBalance !== null ? manualQrisBalance : autoQrisSales;
@@ -350,15 +385,16 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   }, [filteredExpenses]);
 
   // FORMULA 1: TOTAL UANG FISIK AKTUAL LACI
-  // = Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
+  // = Modal Awal + Penjualan Tunai + Pelunasan Utang Tunai - Biaya Operasional Laci - Belanja Stok Laci
   // *Catatan: Pengeluaran dari Kas Besar TIDAK mengurangi uang fisik laci kasir harian!*
-  const totalActualDrawerCash = initialCash + cashSales - drawerOperationalExpenses - drawerStockExpenses;
+  const totalActualDrawerCash = initialCash + cashSales + debtPaymentsCash - drawerOperationalExpenses - drawerStockExpenses;
 
   // FORMULA 2: TOTAL KAS TOKO (TUNAI + QRIS)
-  // = Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
-  const totalKasToko = initialCash + cashSales + effectiveQrisBalance - drawerOperationalExpenses - drawerStockExpenses;
+  // = Modal Awal + Penjualan Tunai + Saldo QRIS + Pelunasan Utang - Biaya Operasional Laci - Belanja Stok Laci
+  // *Pelunasan Tunai menambah uang fisik laci, Pelunasan QRIS menambah Saldo QRIS Toko.*
+  const totalKasToko = initialCash + cashSales + effectiveQrisBalance + debtPaymentsCash - drawerOperationalExpenses - drawerStockExpenses;
 
-  // FORMULA 2: ESTIMASI LABA BERSIH (PERBAIKAN RUMUS)
+  // FORMULA 3: ESTIMASI LABA BERSIH (PERBAIKAN RUMUS)
   // Laba Bersih = Laba Kotor - Biaya Operasional
   // *Catatan Penting: Belanja Stok (Restok) adalah konversi Kas menjadi Aset Persediaan/Inventory.
   // HPP barang sudah otomatis terhitung saat produk terjual (Laba Kotor).
@@ -371,7 +407,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   const DAILY_BANK_TARGET = 173400; // Rp 5.200.000 / bulan
   const TOTAL_DAILY_OBLIGATIONS = DAILY_RENT_TARGET + DAILY_BANK_TARGET; // Rp 195.400 / hari
 
-  const netCashFlow = cashSales - drawerOperationalExpenses - drawerStockExpenses;
+  const netCashFlow = cashSales + debtPaymentsCash - drawerOperationalExpenses - drawerStockExpenses;
   const netAvailableCash = totalActualDrawerCash - TOTAL_DAILY_OBLIGATIONS;
 
   // Average margin for BEP analysis
@@ -760,7 +796,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               id="card-total-penjualan-summary"
               onClick={() => setActiveSubTab('penjualan')}
               className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs cursor-pointer hover:border-emerald-500 hover:shadow-md transition-all group flex flex-col justify-between"
-              title="Klik untuk melihat riwayat transaksi kasir"
+              title="Klik untuk melihat riwayat"
             >
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -778,7 +814,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               <div className="flex items-center justify-between text-[11px] text-gray-500 mt-2 pt-1 border-t border-gray-50">
                 <span>{filteredSales.length} transaksi kasir</span>
                 <span className="text-[10px] font-semibold text-emerald-600 flex items-center gap-0.5 opacity-80 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all">
-                  Lihat Riwayat <ChevronRight className="w-3 h-3" />
+                  Klik untuk melihat riwayat <ChevronRight className="w-3 h-3" />
                 </span>
               </div>
             </div>
@@ -804,7 +840,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               id="card-total-pengeluaran-summary"
               onClick={() => setActiveSubTab('pengeluaran')}
               className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs cursor-pointer hover:border-rose-400 hover:shadow-md transition-all group flex flex-col justify-between"
-              title="Klik untuk melihat rincian pengeluaran toko"
+              title="Klik untuk rincian pengeluaran"
             >
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -830,7 +866,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                 </div>
                 <div className="flex justify-end pt-0.5">
                   <span className="text-[10px] font-semibold text-rose-600 flex items-center gap-0.5 opacity-80 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all">
-                    Rincian Biaya <ChevronRight className="w-3 h-3" />
+                    Klik untuk rincian pengeluaran <ChevronRight className="w-3 h-3" />
                   </span>
                 </div>
               </div>
@@ -861,6 +897,8 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
             initialCash={initialCash}
             cashSales={cashSales}
             qrisSales={effectiveQrisBalance}
+            debtPaymentsCash={debtPaymentsCash}
+            debtPaymentsQris={debtPaymentsQris}
             operationalExpenses={drawerOperationalExpenses}
             stockExpenses={drawerStockExpenses}
             totalActualDrawerCash={totalActualDrawerCash}
@@ -1832,6 +1870,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         netProfit={netProfit}
         initialCash={initialCash}
         cashSales={cashSales}
+        debtPaymentsCash={debtPaymentsCash}
         operationalExpenses={drawerOperationalExpenses}
         stockExpenses={drawerStockExpenses}
         totalActualDrawerCash={totalActualDrawerCash}
