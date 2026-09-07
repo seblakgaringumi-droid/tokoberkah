@@ -33,6 +33,7 @@ import {
 } from './services/api';
 import { supabase, testConnection } from './lib/supabase';
 import { formatRupiah, playBeep, requestNotificationPermission, showOrderNotification, calculateDrawerCash } from './lib/utils';
+import { useFinance } from './context/FinanceContext';
 import { AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
 
 export default function App() {
@@ -251,11 +252,14 @@ export default function App() {
   const pendingOrdersCount = (orders || []).filter((o) => o && o.status === 'PENDING').length;
   const unpaidDebtsCount = (debts || []).filter((d) => d && d.status !== 'paid').length;
 
+  // Global Finance State (Syncing Kas Toko with Laporan & Saldo QRIS)
+  const { getDrawerCashSummary } = useFinance();
+
   // Real-time Kas Toko (Total Kas Toko Tunai + QRIS)
   // Formula: Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
   const kasTokoDetails = useMemo(() => {
-    return calculateDrawerCash(wallet, sales, expenses);
-  }, [wallet, sales, expenses]);
+    return getDrawerCashSummary(wallet, sales, expenses);
+  }, [getDrawerCashSummary, wallet, sales, expenses]);
 
   // Explicitly bound variable 'kasTokoState' for Header (Total Kas Toko Tunai + QRIS)
   const kasTokoState = kasTokoDetails.totalKasToko;
