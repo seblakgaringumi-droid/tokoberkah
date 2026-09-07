@@ -755,40 +755,69 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         <div className="space-y-6">
           {/* 4 Standard Financial Highlight Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-            {/* Omzet / Revenue */}
-            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-gray-500">Total Penjualan</span>
-                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-[#2E7D32] flex items-center justify-center">
-                  <TrendingUp className="w-4 h-4" />
+            {/* Omzet / Revenue - Clickable to Riwayat Transaksi */}
+            <div 
+              id="card-total-penjualan-summary"
+              onClick={() => setActiveSubTab('penjualan')}
+              className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs cursor-pointer hover:border-emerald-500 hover:shadow-md transition-all group flex flex-col justify-between"
+              title="Klik untuk melihat riwayat transaksi kasir"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-gray-500 group-hover:text-emerald-700 transition-colors">
+                    Total Penjualan
+                  </span>
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 text-[#2E7D32] flex items-center justify-center group-hover:bg-emerald-100 group-hover:scale-105 transition-all">
+                    <TrendingUp className="w-4 h-4" />
+                  </div>
                 </div>
+                <p className="text-lg sm:text-xl font-bold text-gray-900 group-hover:text-[#1B5E20] transition-colors">
+                  {formatRupiah(totalRevenue)}
+                </p>
               </div>
-              <p className="text-lg sm:text-xl font-bold text-gray-900">{formatRupiah(totalRevenue)}</p>
-              <p className="text-[11px] text-gray-500 mt-1">{filteredSales.length} transaksi kasir</p>
+              <div className="flex items-center justify-between text-[11px] text-gray-500 mt-2 pt-1 border-t border-gray-50">
+                <span>{filteredSales.length} transaksi kasir</span>
+                <span className="text-[10px] font-semibold text-emerald-600 flex items-center gap-0.5 opacity-80 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all">
+                  Lihat Riwayat <ChevronRight className="w-3 h-3" />
+                </span>
+              </div>
             </div>
 
             {/* Estimasi Laba Kotor */}
-            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-gray-500">Estimasi Laba Kotor</span>
-                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center">
-                  <DollarSign className="w-4 h-4" />
-                </div>
-              </div>
-              <p className="text-lg sm:text-xl font-bold text-blue-900">{formatRupiah(totalGrossProfit)}</p>
-              <p className="text-[11px] text-gray-500 mt-1">Margin Toko: ~{averageMarginPct.toFixed(1)}%</p>
-            </div>
-
-            {/* Total Pengeluaran */}
             <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-gray-500">Total Pengeluaran Kas</span>
-                  <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <span className="text-xs font-semibold text-gray-500">Estimasi Laba Kotor</span>
+                  <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center">
+                    <DollarSign className="w-4 h-4" />
+                  </div>
+                </div>
+                <p className="text-lg sm:text-xl font-bold text-blue-900">{formatRupiah(totalGrossProfit)}</p>
+              </div>
+              <div className="text-[11px] text-gray-500 mt-2 pt-1 border-t border-gray-50">
+                <span>Margin Toko: ~{averageMarginPct.toFixed(1)}%</span>
+              </div>
+            </div>
+
+            {/* Total Pengeluaran - Clickable to Biaya Toko */}
+            <div 
+              id="card-total-pengeluaran-summary"
+              onClick={() => setActiveSubTab('pengeluaran')}
+              className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs cursor-pointer hover:border-rose-400 hover:shadow-md transition-all group flex flex-col justify-between"
+              title="Klik untuk melihat rincian pengeluaran toko"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-gray-500 group-hover:text-rose-700 transition-colors">
+                    Total Pengeluaran Kas
+                  </span>
+                  <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center group-hover:bg-rose-100 group-hover:scale-105 transition-all">
                     <TrendingDown className="w-4 h-4" />
                   </div>
                 </div>
-                <p className="text-lg sm:text-xl font-bold text-rose-900">{formatRupiah(totalExpenseAmount)}</p>
+                <p className="text-lg sm:text-xl font-bold text-rose-900 group-hover:text-rose-950 transition-colors">
+                  {formatRupiah(totalExpenseAmount)}
+                </p>
               </div>
               <div className="text-[10px] text-gray-500 mt-2 space-y-0.5 pt-1.5 border-t border-gray-100">
                 <div className="flex justify-between">
@@ -798,6 +827,11 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                 <div className="flex justify-between">
                   <span className="text-amber-700 font-medium">• Belanja Stok (Aset):</span>
                   <span className="font-semibold text-amber-800">{formatRupiah(totalStockExpenses)}</span>
+                </div>
+                <div className="flex justify-end pt-0.5">
+                  <span className="text-[10px] font-semibold text-rose-600 flex items-center gap-0.5 opacity-80 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all">
+                    Rincian Biaya <ChevronRight className="w-3 h-3" />
+                  </span>
                 </div>
               </div>
             </div>
