@@ -379,14 +379,15 @@ export function aggregateDailySales(transactionsList?: Sale[] | null): Record<st
 }
 
 /**
- * Calculates real-time total physical drawer cash (Kas Fisik Aktual Laci):
- * Formula: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
- * Only transactions from the current day (today WIB) are included.
+ * Calculates real-time total physical drawer cash and total store cash (Kas Fisik & Total Kas Toko):
+ * Formula Kas Toko: Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
+ * Only transactions from the current day (today WIB) are included by default.
  */
 export function calculateDrawerCash(
   wallet?: StoreWallet | null,
   sales?: Sale[] | null,
-  expenses?: Expense[] | null
+  expenses?: Expense[] | null,
+  manualQrisAdjustment?: number | null
 ): DrawerCashBreakdown {
   const initialCash = Number(wallet?.initial_cash) || 500000;
   const todayStr = getLocalDate(new Date());
@@ -407,7 +408,7 @@ export function calculateDrawerCash(
     .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
 
   // 1b. Saldo QRIS / Bank (Non-Tunai)
-  const qrisSales = (sales || [])
+  const autoQrisSales = (sales || [])
     .filter((s) => {
       if (!isValidSale(s)) return false;
       if (!isToday(s.created_at)) return false;
@@ -415,6 +416,9 @@ export function calculateDrawerCash(
       return m === 'QRIS' || m === 'BANK' || m === 'TRANSFER' || m === 'NON_TUNAI' || m.includes('QRIS') || m.includes('TRANSFER');
     })
     .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
+
+  // Effective QRIS: manual override if explicitly provided / configured, otherwise auto from sales
+  const qrisSales = manualQrisAdjustment !== undefined && manualQrisAdjustment !== null ? manualQrisAdjustment : autoQrisSales;
 
   // 2. Biaya Operasional Laci (Drawer Operational Expenses)
   const drawerOperationalExpenses = (expenses || [])
