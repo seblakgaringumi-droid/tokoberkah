@@ -17,13 +17,15 @@ import {
   DebtCredit, 
   Expense, 
   StoreWallet, 
-  StoreProfile 
+  StoreProfile,
+  DebtPayment
 } from './types';
 import { 
   fetchProducts, 
   fetchSales, 
   fetchOrders, 
   fetchDebtsCredits, 
+  fetchDebtPayments,
   fetchExpenses, 
   fetchStoreWallets,
   fetchStoreProfile,
@@ -50,6 +52,7 @@ export default function App() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [debts, setDebts] = useState<DebtCredit[]>([]);
+  const [debtPayments, setDebtPayments] = useState<DebtPayment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [wallet, setWallet] = useState<StoreWallet | null>(null);
   const [storeProfile, setStoreProfile] = useState<StoreProfile>(DEFAULT_STORE_PROFILE);
@@ -58,9 +61,17 @@ export default function App() {
   const [cartCount, setCartCount] = useState<number>(0);
 
   // Web Notification Permission State
-  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(() => {
-    return 'Notification' in window ? Notification.permission : 'denied';
-  });
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default');
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        setNotifPermission(Notification.permission);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const handleRequestPermission = async () => {
     const perm = await requestNotificationPermission();
@@ -83,6 +94,7 @@ export default function App() {
         salesRes, 
         ordersRes, 
         debtsRes, 
+        debtPaymentsRes,
         expensesRes, 
         walletRes,
         profileRes
@@ -91,6 +103,7 @@ export default function App() {
         fetchSales(),
         fetchOrders(),
         fetchDebtsCredits(),
+        fetchDebtPayments(),
         fetchExpenses(),
         fetchStoreWallets(),
         fetchStoreProfile(),
@@ -110,6 +123,7 @@ export default function App() {
       if (salesRes.status === 'fulfilled') setSales(currentSales);
       if (ordersRes.status === 'fulfilled') setOrders(currentOrders);
       if (debtsRes.status === 'fulfilled') setDebts(debtsRes.value);
+      if (debtPaymentsRes.status === 'fulfilled') setDebtPayments(debtPaymentsRes.value);
       if (expensesRes.status === 'fulfilled') setExpenses(expensesRes.value);
       if (walletRes.status === 'fulfilled') setWallet(walletRes.value);
       if (profileRes.status === 'fulfilled' && profileRes.value) setStoreProfile(profileRes.value);
@@ -405,8 +419,15 @@ export default function App() {
                   <UtangView
                     debts={debts}
                     onRefresh={async () => {
-                      const d = await fetchDebtsCredits();
+                      const [d, dp] = await Promise.all([
+                        fetchDebtsCredits(),
+                        fetchDebtPayments(),
+                      ]);
                       setDebts(d);
+                      setDebtPayments(dp);
+                    }}
+                    onPaymentRecorded={(newPayment) => {
+                      setDebtPayments((prev) => [newPayment, ...prev]);
                     }}
                   />
                 )}
@@ -416,6 +437,7 @@ export default function App() {
                     sales={sales}
                     expenses={expenses}
                     wallet={wallet}
+                    debtPayments={debtPayments}
                     onRefresh={async () => {
                       await loadAllData(false);
                     }}
