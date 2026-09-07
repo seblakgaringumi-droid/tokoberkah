@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { Sale, Expense, StoreWallet, StoreProfile } from '../../types';
 import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
+import { useFinance } from '../../context/FinanceContext';
 import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
@@ -150,28 +151,9 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   const [selectedSaleForDetail, setSelectedSaleForDetail] = useState<Sale | null>(null);
   const [expandedSaleIds, setExpandedSaleIds] = useState<Set<string>>(new Set());
 
-  // Manual QRIS balance adjustment state
-  const [manualQrisBalance, setManualQrisBalance] = useState<number | null>(() => {
-    try {
-      const saved = localStorage.getItem('pos_manual_qris_balance');
-      if (saved !== null && saved !== '') {
-        const num = Number(saved);
-        return isNaN(num) ? null : num;
-      }
-    } catch (_) {}
-    return null;
-  });
-
-  const handleUpdateQrisBalance = (val: number | null) => {
-    setManualQrisBalance(val);
-    try {
-      if (val === null) {
-        localStorage.removeItem('pos_manual_qris_balance');
-      } else {
-        localStorage.setItem('pos_manual_qris_balance', String(val));
-      }
-    } catch (_) {}
-  };
+  // Global QRIS balance adjustment state via FinanceContext
+  const { manualQrisBalance, updateManualQrisBalance } = useFinance();
+  const handleUpdateQrisBalance = updateManualQrisBalance;
 
   // Auto-Sync Retroactive Online Orders state
   const [isSyncingOnline, setIsSyncingOnline] = useState(false);
