@@ -19,6 +19,8 @@ interface ArusKasLaciCardProps {
   initialCash: number;
   cashSales: number;
   qrisSales: number;
+  debtPaymentsCash?: number;
+  debtPaymentsQris?: number;
   operationalExpenses: number;
   stockExpenses: number;
   totalActualDrawerCash: number;
@@ -32,6 +34,8 @@ export const ArusKasLaciCard: React.FC<ArusKasLaciCardProps> = ({
   initialCash,
   cashSales,
   qrisSales,
+  debtPaymentsCash = 0,
+  debtPaymentsQris = 0,
   operationalExpenses,
   stockExpenses,
   totalActualDrawerCash,
@@ -101,13 +105,17 @@ export const ArusKasLaciCard: React.FC<ArusKasLaciCardProps> = ({
             Kasir Shift
           </span>
         </div>
-        <div className="flex items-baseline gap-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
           <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-white">
             {formatRupiah(totalKasToko)}
           </span>
+          <div className="text-right text-[11px] text-emerald-200 bg-white/10 px-2.5 py-1 rounded-lg">
+            <span>Uang Fisik Laci: </span>
+            <span className="font-bold font-mono text-white">{formatRupiah(totalActualDrawerCash)}</span>
+          </div>
         </div>
         <p className="text-[11px] text-emerald-200/90 mt-1.5">
-          Rumus: <span className="text-white font-mono">Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional - Belanja Stok Laci</span>
+          Rumus: <span className="text-white font-mono">Modal Awal + Penjualan Tunai + Saldo QRIS + Pelunasan Utang - Biaya Operasional - Belanja Stok Laci</span>
         </p>
       </div>
 
@@ -134,8 +142,19 @@ export const ArusKasLaciCard: React.FC<ArusKasLaciCardProps> = ({
             <span className="text-sm sm:text-base font-bold text-[#1B5E20] font-mono mt-0.5 block">
               +{formatRupiah(cashSales)}
             </span>
+            <div className="mt-1.5 pt-1.5 border-t border-emerald-200/70 flex items-center justify-between text-[11px]">
+              <span className="text-emerald-700 font-medium">+Pelunasan Utang:</span>
+              <span className="font-mono text-emerald-900 font-bold">{formatRupiah(debtPaymentsCash)}</span>
+            </div>
           </div>
-          <span className="text-[10px] text-emerald-700 mt-2">Uang masuk transaksi cash</span>
+          <div className="text-[10px] text-emerald-700 mt-2 space-y-0.5">
+            <span>Uang masuk cash & pelunasan bon</span>
+            {debtPaymentsCash > 0 && (
+              <p className="text-[9.5px] font-semibold text-[#1B5E20]">
+                Total Masuk Fisik: {formatRupiah(cashSales + debtPaymentsCash)}
+              </p>
+            )}
+          </div>
         </div>
 
         {/* 3. Saldo QRIS */}
@@ -162,6 +181,12 @@ export const ArusKasLaciCard: React.FC<ArusKasLaciCardProps> = ({
             <span className="text-sm sm:text-base font-bold text-blue-700 font-mono mt-0.5 block">
               +{formatRupiah(qrisSales)}
             </span>
+            {debtPaymentsQris > 0 && (
+              <div className="mt-1.5 pt-1.5 border-t border-blue-200/70 flex items-center justify-between text-[11px]">
+                <span className="text-blue-700 font-medium">+Pelunasan QRIS:</span>
+                <span className="font-mono text-blue-900 font-bold">{formatRupiah(debtPaymentsQris)}</span>
+              </div>
+            )}
           </div>
           <div className="flex items-center justify-between mt-2">
             <span className="text-[10px] text-blue-700">
