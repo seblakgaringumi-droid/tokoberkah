@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { Product, Sale, SaleItem, Expense, Order, DebtCredit, StoreWallet, StoreProfile } from '../types';
+import { Product, Sale, SaleItem, Expense, Order, DebtCredit, DebtPayment, CashFlowEntry, StoreWallet, StoreProfile } from '../types';
 import { roundStock } from '../lib/utils';
 
 // ==================== LOCAL CACHE HELPERS ====================
@@ -9,6 +9,8 @@ const PRODUCT_IMAGES_KEY = 'pos_product_images_cache';
 const SALES_CACHE_KEY = 'pos_sales_cache';
 const EXPENSES_CACHE_KEY = 'pos_expenses_cache';
 const DEBTS_CACHE_KEY = 'pos_debts_cache';
+const DEBT_PAYMENTS_CACHE_KEY = 'pos_debt_payments_cache';
+const CASH_FLOW_CACHE_KEY = 'pos_cash_flow_cache';
 const ORDERS_CACHE_KEY = 'pos_orders_cache';
 const WALLET_CACHE_KEY = 'pos_wallet_cache';
 const STORE_PROFILE_CACHE_KEY = 'pos_store_profile_cache';
@@ -337,6 +339,40 @@ export function saveLocalDebts(debts: DebtCredit[]) {
     localStorage.setItem(DEBTS_CACHE_KEY, JSON.stringify(debts));
   } catch (e) {
     console.warn('Local storage save debts note:', e);
+  }
+}
+
+export function getLocalDebtPayments(): DebtPayment[] {
+  try {
+    const raw = localStorage.getItem(DEBT_PAYMENTS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalDebtPayments(payments: DebtPayment[]) {
+  try {
+    localStorage.setItem(DEBT_PAYMENTS_CACHE_KEY, JSON.stringify(payments));
+  } catch (e) {
+    console.warn('Local storage save debt payments note:', e);
+  }
+}
+
+export function getLocalCashFlow(): CashFlowEntry[] {
+  try {
+    const raw = localStorage.getItem(CASH_FLOW_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalCashFlow(entries: CashFlowEntry[]) {
+  try {
+    localStorage.setItem(CASH_FLOW_CACHE_KEY, JSON.stringify(entries));
+  } catch (e) {
+    console.warn('Local storage save cash flow note:', e);
   }
 }
 
@@ -1502,6 +1538,85 @@ export async function deleteDebtCredit(id: string): Promise<void> {
   } catch (err) {
     console.warn('deleteDebtCredit exception:', err);
   }
+}
+
+// ==================== DEBT PAYMENTS & CASH FLOW ====================
+
+export async function fetchDebtPayments(): Promise<DebtPayment[]> {
+  try {
+    const { data, error } = await supabase
+      .from('debt_payments')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      // Table may not exist yet in Supabase or network error, use cached
+      return getLocalDebtPayments();
+    }
+    const safeList = (data || []).filter(Boolean);
+    saveLocalDebtPayments(safeList);
+    return safeList;
+  } catch (err) {
+    console.warn('fetchDebtPayments fallback to local cache:', err);
+    return getLocalDebtPayments();
+  }
+}
+
+export async function recordDebtPayment(payload: {
+  debt_id: string;
+  customer_name?: string;
+  amount: number;
+  payment_method: 'TUNAI' | 'QRIS' | string;
+  notes?: string | null;
+}): Promise<DebtPayment> {
+  const method = (payload.payment_method || 'TUNAI').toUpperCase().trim();
+  const normalizedMethod = method === 'QRIS' ? 'QRIS' : 'TUNAI';
+
+  const newPayment: DebtPayment = {
+    id: `dp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    debt_id: payload.debt_id,
+    customer_name: payload.customer_name || 'Pelanggan',
+    amount: Number(payload.amount) || 0,
+    payment_method: normalizedMethod,
+    type: 'INCOME_DEBT_PAYMENT',
+    created_at: new Date().toISOString(),
+    notes: payload.notes || null,
+  };
+
+  // 1. Save to local debt payments cache
+  const cachedPayments = getLocalDebtPayments();
+  saveLocalDebtPayments([newPayment, ...cachedPayments]);
+
+  // 2. Save cash flow entry
+  const cfEntry: CashFlowEntry = {
+    id: `cf_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    type: 'INCOME_DEBT_PAYMENT',
+    amount: newPayment.amount,
+    payment_method: normalizedMethod,
+    reference_id: payload.debt_id,
+    description: `Pelunasan piutang ${payload.customer_name || 'Pelanggan'} (${normalizedMethod})`,
+    created_at: newPayment.created_at,
+  };
+  const cachedCashFlow = getLocalCashFlow();
+  saveLocalCashFlow([cfEntry, ...cachedCashFlow]);
+
+  // 3. Update the debt remaining balance
+  await payDebtCredit(payload.debt_id, newPayment.amount);
+
+  // 4. Try remote sync to Supabase (graceful fallback)
+  try {
+    await supabase.from('debt_payments').insert([newPayment]);
+  } catch (err) {
+    console.warn('debt_payments Supabase insert note (cached locally):', err);
+  }
+
+  try {
+    await supabase.from('cash_flow').insert([cfEntry]);
+  } catch (err) {
+    console.warn('cash_flow Supabase insert note (cached locally):', err);
+  }
+
+  return newPayment;
 }
 
 // ==================== STORE WALLETS ====================
