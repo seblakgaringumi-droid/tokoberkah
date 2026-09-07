@@ -251,14 +251,14 @@ export default function App() {
   const pendingOrdersCount = (orders || []).filter((o) => o && o.status === 'PENDING').length;
   const unpaidDebtsCount = (debts || []).filter((d) => d && d.status !== 'paid').length;
 
-  // Real-time Kas Toko (Total Uang Fisik Aktual Laci)
-  // Formula: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
+  // Real-time Kas Toko (Total Kas Toko Tunai + QRIS)
+  // Formula: Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
   const kasTokoDetails = useMemo(() => {
     return calculateDrawerCash(wallet, sales, expenses);
   }, [wallet, sales, expenses]);
 
-  // Explicitly bound variable 'kasTokoState' for Header
-  const kasTokoState = kasTokoDetails.totalActualDrawerCash;
+  // Explicitly bound variable 'kasTokoState' for Header (Total Kas Toko Tunai + QRIS)
+  const kasTokoState = kasTokoDetails.totalKasToko;
 
   return (
     <div className="min-h-screen flex flex-row bg-[#f0f2f0] font-sans text-gray-800 overflow-x-hidden">
