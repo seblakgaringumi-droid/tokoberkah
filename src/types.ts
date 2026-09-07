@@ -109,6 +109,27 @@ export interface DebtCredit {
   notes?: string | null;
 }
 
+export interface DebtPayment {
+  id: string;
+  debt_id: string;
+  customer_name: string;
+  amount: number;
+  payment_method: 'TUNAI' | 'QRIS' | string;
+  type: 'INCOME_DEBT_PAYMENT' | string;
+  created_at: string;
+  notes?: string | null;
+}
+
+export interface CashFlowEntry {
+  id: string;
+  type: 'INCOME_DEBT_PAYMENT' | 'SALE_CASH' | 'SALE_QRIS' | 'EXPENSE_DRAWER' | 'EXPENSE_KAS_BESAR' | string;
+  amount: number;
+  payment_method: 'TUNAI' | 'QRIS' | string;
+  reference_id?: string;
+  description: string;
+  created_at: string;
+}
+
 export interface StoreWallet {
   id: number;
   shopping_budget: number;
