@@ -1,23 +1,37 @@
 import React, { useState, useMemo } from 'react';
-import { BarChart3, TrendingUp, DollarSign, Calendar, Filter, Target } from 'lucide-react';
+import { BarChart3, TrendingUp, DollarSign, Calendar, Filter, Target, RefreshCw } from 'lucide-react';
 import { Sale, Expense } from '../../types';
-import { formatRupiah, formatDate, isStockExpense } from '../../lib/utils';
+import { formatRupiah, formatDate, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
 
 interface TrenChartCardProps {
   sales: Sale[];
   expenses: Expense[];
   onOpenBEPModal: () => void;
+  onRefresh?: () => Promise<void> | void;
 }
 
 export const TrenChartCard: React.FC<TrenChartCardProps> = ({
   sales,
   expenses,
   onOpenBEPModal,
+  onRefresh,
 }) => {
   const [chartPeriod, setChartPeriod] = useState<'7_hari' | '30_hari' | 'semua'>('7_hari');
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Group data by date
+  const handleRefresh = async () => {
+    if (onRefresh && !isRefreshing) {
+      setIsRefreshing(true);
+      try {
+        await onRefresh();
+      } finally {
+        setIsRefreshing(false);
+      }
+    }
+  };
+
+  // Group data by local date (WIB / Asia/Jakarta)
   const chartData = useMemo(() => {
     const dailyMap: Record<string, { 
       dateStr: string; 
@@ -31,17 +45,18 @@ export const TrenChartCard: React.FC<TrenChartCardProps> = ({
     }> = {};
     
     // Determine cutoff date based on period
-    const now = new Date();
+    const todayStr = getLocalDate(new Date());
+    const [y, m, d] = (todayStr || '2026-09-07').split('-').map(Number);
+
     let cutoffDays = 7;
     if (chartPeriod === '30_hari') cutoffDays = 30;
     if (chartPeriod === 'semua') cutoffDays = 365;
 
-    // Pre-populate last N days
+    // Pre-populate last N calendar days in Asia/Jakarta timezone
     const dayKeys: string[] = [];
     for (let i = cutoffDays - 1; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().split('T')[0];
+      const targetDate = new Date(y, m - 1, d - i);
+      const key = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
       dayKeys.push(key);
       dailyMap[key] = {
         dateStr: key,
@@ -55,10 +70,10 @@ export const TrenChartCard: React.FC<TrenChartCardProps> = ({
       };
     }
 
-    // Process sales
+    // Process valid sales (CASH, QRIS, UTANG/BON, ONLINE) using Asia/Jakarta local date
     for (const sale of sales) {
-      if (!sale.created_at) continue;
-      const key = sale.created_at.split('T')[0];
+      if (!isValidSale(sale) || !sale.created_at) continue;
+      const key = getLocalDate(sale.created_at);
       if (dailyMap[key]) {
         const rev = Number(sale.total_amount) || 0;
         dailyMap[key].revenue += rev;
@@ -66,7 +81,11 @@ export const TrenChartCard: React.FC<TrenChartCardProps> = ({
         let saleCost = 0;
         if (sale.items && Array.isArray(sale.items) && sale.items.length > 0) {
           for (const it of sale.items) {
-            saleCost += (it.cost_price || 0) * (it.qty_kg || 0);
+            saleCost += (Number(it.cost_price) || 0) * (Number(it.qty_kg || it.qty) || 0);
+          }
+        } else if (sale.sale_items && Array.isArray(sale.sale_items) && sale.sale_items.length > 0) {
+          for (const it of sale.sale_items) {
+            saleCost += (Number(it.cost_price) || 0) * (Number(it.qty_kg || it.qty) || 0);
           }
         } else {
           saleCost = rev * 0.8;
@@ -78,7 +97,7 @@ export const TrenChartCard: React.FC<TrenChartCardProps> = ({
     // Process expenses with source & category distinction
     for (const exp of expenses) {
       if (!exp.created_at) continue;
-      const key = exp.created_at.split('T')[0];
+      const key = getLocalDate(exp.created_at);
       if (dailyMap[key]) {
         const amt = Number(exp.amount) || 0;
         dailyMap[key].totalExpense += amt;
@@ -132,25 +151,38 @@ export const TrenChartCard: React.FC<TrenChartCardProps> = ({
           </div>
         </div>
 
-        {/* Filter Pills */}
-        <div className="flex items-center gap-1.5 p-1 bg-gray-100/90 rounded-xl self-start sm:self-auto text-xs font-semibold">
-          {[
-            { id: '7_hari', label: '7 Hari' },
-            { id: '30_hari', label: 'Bulanan' },
-            { id: 'semua', label: 'Semua' },
-          ].map((p) => (
+        {/* Filter Pills & Refresh */}
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          {onRefresh && (
             <button
-              key={p.id}
-              onClick={() => setChartPeriod(p.id as any)}
-              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                chartPeriod === p.id
-                  ? 'bg-white text-gray-900 shadow-xs'
-                  : 'text-gray-500 hover:text-gray-900'
-              }`}
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              title="Sinkronkan & Muat Ulang Data Grafik"
+              className="p-1.5 rounded-xl border border-gray-200 text-gray-500 hover:text-[#1B5E20] hover:bg-emerald-50 transition-colors cursor-pointer disabled:opacity-50"
             >
-              {p.label}
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-[#2E7D32]' : ''}`} />
             </button>
-          ))}
+          )}
+
+          <div className="flex items-center gap-1.5 p-1 bg-gray-100/90 rounded-xl text-xs font-semibold">
+            {[
+              { id: '7_hari', label: '7 Hari' },
+              { id: '30_hari', label: 'Bulanan' },
+              { id: 'semua', label: 'Semua' },
+            ].map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setChartPeriod(p.id as any)}
+                className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  chartPeriod === p.id
+                    ? 'bg-white text-gray-900 shadow-xs'
+                    : 'text-gray-500 hover:text-gray-900'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
