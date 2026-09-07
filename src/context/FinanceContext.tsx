@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
-import { Sale, Expense, StoreWallet } from '../types';
+import { Sale, Expense, StoreWallet, DebtPayment } from '../types';
 import { calculateDrawerCash, DrawerCashBreakdown, getLocalDate, isValidSale, isStockExpense } from '../lib/utils';
 
 interface FinanceContextType {
@@ -12,6 +12,7 @@ interface FinanceContextType {
     wallet?: StoreWallet | null,
     sales?: Sale[] | null,
     expenses?: Expense[] | null,
+    debtPayments?: DebtPayment[] | null,
     filterDate?: string
   ) => DrawerCashBreakdown;
 }
@@ -48,9 +49,10 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       wallet?: StoreWallet | null,
       sales?: Sale[] | null,
       expenses?: Expense[] | null,
+      debtPayments?: DebtPayment[] | null,
       filterDate?: string
     ): DrawerCashBreakdown => {
-      return calculateDrawerCash(wallet, sales, expenses, manualQrisBalance);
+      return calculateDrawerCash(wallet, sales, expenses, manualQrisBalance, debtPayments, filterDate);
     };
   }, [manualQrisBalance]);
 
