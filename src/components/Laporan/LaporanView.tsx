@@ -150,6 +150,29 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   const [selectedSaleForDetail, setSelectedSaleForDetail] = useState<Sale | null>(null);
   const [expandedSaleIds, setExpandedSaleIds] = useState<Set<string>>(new Set());
 
+  // Manual QRIS balance adjustment state
+  const [manualQrisBalance, setManualQrisBalance] = useState<number | null>(() => {
+    try {
+      const saved = localStorage.getItem('pos_manual_qris_balance');
+      if (saved !== null && saved !== '') {
+        const num = Number(saved);
+        return isNaN(num) ? null : num;
+      }
+    } catch (_) {}
+    return null;
+  });
+
+  const handleUpdateQrisBalance = (val: number | null) => {
+    setManualQrisBalance(val);
+    try {
+      if (val === null) {
+        localStorage.removeItem('pos_manual_qris_balance');
+      } else {
+        localStorage.setItem('pos_manual_qris_balance', String(val));
+      }
+    } catch (_) {}
+  };
+
   // Auto-Sync Retroactive Online Orders state
   const [isSyncingOnline, setIsSyncingOnline] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
@@ -290,6 +313,19 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
       .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
   }, [filteredSales]);
 
+  // Saldo Transaksi QRIS / Non-Tunai Otomatis dari Penjualan
+  const autoQrisSales = useMemo(() => {
+    return filteredSales
+      .filter((s) => {
+        const m = (s.payment_method || '').toUpperCase();
+        return m === 'QRIS' || m === 'BANK' || m === 'TRANSFER' || m === 'NON_TUNAI' || m.includes('QRIS') || m.includes('TRANSFER');
+      })
+      .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
+  }, [filteredSales]);
+
+  // Saldo QRIS efektif (menggunakan penyesuaian manual jika diset, atau otomatis dari penjualan)
+  const effectiveQrisBalance = manualQrisBalance !== null ? manualQrisBalance : autoQrisSales;
+
   // Expenses grouped by source (Laci vs Kas Besar) and category (Belanja Stok vs Biaya Operasional)
   const drawerOperationalExpenses = useMemo(() => {
     return filteredExpenses
@@ -335,6 +371,10 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   // = Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
   // *Catatan: Pengeluaran dari Kas Besar TIDAK mengurangi uang fisik laci kasir harian!*
   const totalActualDrawerCash = initialCash + cashSales - drawerOperationalExpenses - drawerStockExpenses;
+
+  // FORMULA 2: TOTAL KAS TOKO (TUNAI + QRIS)
+  // = Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
+  const totalKasToko = initialCash + cashSales + effectiveQrisBalance - drawerOperationalExpenses - drawerStockExpenses;
 
   // FORMULA 2: ESTIMASI LABA BERSIH (PERBAIKAN RUMUS)
   // Laba Bersih = Laba Kotor - Biaya Operasional
@@ -804,10 +844,14 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
           <ArusKasLaciCard
             initialCash={initialCash}
             cashSales={cashSales}
+            qrisSales={effectiveQrisBalance}
             operationalExpenses={drawerOperationalExpenses}
             stockExpenses={drawerStockExpenses}
             totalActualDrawerCash={totalActualDrawerCash}
+            totalKasToko={totalKasToko}
             onOpenOpnameModal={() => setIsOpnameModalOpen(true)}
+            isManualQris={manualQrisBalance !== null}
+            onUpdateQrisBalance={handleUpdateQrisBalance}
           />
 
           {/* Module 2: Alokasi Kewajiban & Reservasi Dana (Sinking Fund) */}
