@@ -367,9 +367,17 @@ export default function App() {
                   <StokView
                     products={products}
                     storeProfile={storeProfile}
+                    kasTokoBalance={kasTokoState}
+                    onExpenseCreated={(newExp) => {
+                      setExpenses((prev) => [newExp, ...prev]);
+                    }}
                     onRefresh={async () => {
-                      const prods = await fetchProducts();
+                      const [prods, exps] = await Promise.all([
+                        fetchProducts(),
+                        fetchExpenses(),
+                      ]);
                       setProducts(prods);
+                      setExpenses(exps);
                     }}
                   />
                 )}
