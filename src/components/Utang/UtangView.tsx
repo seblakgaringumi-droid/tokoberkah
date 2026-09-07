@@ -15,16 +15,17 @@ import {
   X,
   CreditCard
 } from 'lucide-react';
-import { DebtCredit } from '../../types';
+import { DebtCredit, DebtPayment } from '../../types';
 import { formatRupiah, formatDate, playBeep } from '../../lib/utils';
-import { createDebtCredit, payDebtCredit, deleteDebtCredit } from '../../services/api';
+import { createDebtCredit, payDebtCredit, deleteDebtCredit, recordDebtPayment } from '../../services/api';
 
 interface UtangViewProps {
   debts: DebtCredit[];
   onRefresh: () => Promise<void>;
+  onPaymentRecorded?: (payment: DebtPayment) => void;
 }
 
-export const UtangView: React.FC<UtangViewProps> = ({ debts, onRefresh }) => {
+export const UtangView: React.FC<UtangViewProps> = ({ debts, onRefresh, onPaymentRecorded }) => {
   const [filterType, setFilterType] = useState<'SEMUA' | 'PIUTANG' | 'UTANG'>('SEMUA');
   const [filterStatus, setFilterStatus] = useState<'SEMUA' | 'UNPAID' | 'PAID'>('UNPAID');
   const [searchQuery, setSearchQuery] = useState('');
@@ -33,6 +34,7 @@ export const UtangView: React.FC<UtangViewProps> = ({ debts, onRefresh }) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [payModalItem, setPayModalItem] = useState<DebtCredit | null>(null);
   const [paymentInput, setPaymentInput] = useState<number | string>('');
+  const [paymentMethod, setPaymentMethod] = useState<'TUNAI' | 'QRIS'>('TUNAI');
 
   // Add form state
   const [formData, setFormData] = useState({
@@ -120,10 +122,24 @@ export const UtangView: React.FC<UtangViewProps> = ({ debts, onRefresh }) => {
 
     try {
       setIsSubmitting(true);
-      await payDebtCredit(payModalItem.id, amount);
+      const isPiutang = payModalItem.type === 'PIUTANG';
+
+      const newPayment = await recordDebtPayment({
+        debt_id: payModalItem.id,
+        customer_name: payModalItem.customer_or_supplier_name,
+        amount,
+        payment_method: paymentMethod,
+        notes: `Pelunasan ${isPiutang ? 'piutang pelanggan' : 'utang supplier'} (${paymentMethod}): ${payModalItem.customer_or_supplier_name}`,
+      });
+
+      if (onPaymentRecorded) {
+        onPaymentRecorded(newPayment);
+      }
+
       playBeep('success');
       setPayModalItem(null);
       setPaymentInput('');
+      setPaymentMethod('TUNAI');
       await onRefresh();
     } catch (err: any) {
       alert(`Gagal mencatat pembayaran: ${err.message}`);
@@ -589,10 +605,58 @@ export const UtangView: React.FC<UtangViewProps> = ({ debts, onRefresh }) => {
               <button
                 type="button"
                 onClick={() => setPaymentInput(payModalItem.remaining_amount)}
-                className="w-full py-1.5 text-xs text-[#2E7D32] font-semibold bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors"
+                className="w-full py-1.5 text-xs text-[#2E7D32] font-semibold bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer"
               >
                 Bayar Lunas Langsung ({formatRupiah(payModalItem.remaining_amount)})
               </button>
+
+              {/* Metode Pembayaran: Tunai vs QRIS */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                  Metode Pembayaran <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('TUNAI')}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
+                      paymentMethod === 'TUNAI'
+                        ? 'border-[#2E7D32] bg-emerald-50 text-[#1B5E20] ring-1 ring-[#2E7D32]'
+                        : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-xs flex items-center gap-1">
+                        💵 Tunai
+                      </span>
+                      {paymentMethod === 'TUNAI' && <span className="w-2 h-2 rounded-full bg-[#2E7D32]"></span>}
+                    </div>
+                    <span className="text-[10px] text-gray-500 leading-tight">
+                      Masuk ke Kas Laci (+Pelunasan Tunai)
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('QRIS')}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
+                      paymentMethod === 'QRIS'
+                        ? 'border-blue-600 bg-blue-50 text-blue-900 ring-1 ring-blue-600'
+                        : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-xs flex items-center gap-1">
+                        📱 QRIS / Bank
+                      </span>
+                      {paymentMethod === 'QRIS' && <span className="w-2 h-2 rounded-full bg-blue-600"></span>}
+                    </div>
+                    <span className="text-[10px] text-gray-500 leading-tight">
+                      Masuk ke Saldo QRIS (+Saldo QRIS)
+                    </span>
+                  </button>
+                </div>
+              </div>
 
               <div className="flex gap-2 pt-2">
                 <button
