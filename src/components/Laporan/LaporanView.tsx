@@ -37,7 +37,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { Sale, Expense, StoreWallet, StoreProfile } from '../../types';
-import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense } from '../../lib/utils';
+import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
 import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
@@ -207,50 +207,46 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     });
   };
 
-  // Date filtering helper with precise timestamp range
+  // Date filtering helper with precise Asia/Jakarta (WIB) timezone matching
   const filterByDate = (dateStr: string) => {
     if (dateFilter === 'semua') return true;
     if (!dateStr) return false;
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return false;
-    const now = new Date();
+    const txDateStr = getLocalDate(dateStr);
+    if (!txDateStr) return false;
+
+    const todayStr = getLocalDate(new Date());
 
     if (dateFilter === 'hari_ini') {
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-      return date >= startOfDay && date <= endOfDay;
+      return txDateStr === todayStr;
     }
 
     if (dateFilter === 'minggu_ini') {
-      const startOf7Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0);
-      const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-      return date >= startOf7Days && date <= endOfToday;
+      const [y, m, d] = (todayStr || '2026-09-07').split('-').map(Number);
+      const start7 = new Date(y, m - 1, d - 6);
+      const startKey = `${start7.getFullYear()}-${String(start7.getMonth() + 1).padStart(2, '0')}-${String(start7.getDate()).padStart(2, '0')}`;
+      return txDateStr >= startKey && txDateStr <= todayStr;
     }
 
     if (dateFilter === 'pilih_bulan') {
-      const startOfMonth = new Date(selectedYear, selectedMonth, 1, 0, 0, 0, 0);
-      const endOfMonth = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59, 999);
-      return date >= startOfMonth && date <= endOfMonth;
+      const targetMonthStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}`;
+      return txDateStr.startsWith(targetMonthStr);
     }
 
     if (dateFilter === 'pilih_tahun') {
-      const startOfYear = new Date(selectedYear, 0, 1, 0, 0, 0, 0);
-      const endOfYear = new Date(selectedYear, 11, 31, 23, 59, 59, 999);
-      return date >= startOfYear && date <= endOfYear;
+      return txDateStr.startsWith(`${selectedYear}-`);
     }
 
     if (dateFilter === 'custom_range') {
-      if (!customStartDate && !customEndDate) return true;
-      const start = customStartDate ? new Date(`${customStartDate}T00:00:00.000`) : new Date(0);
-      const end = customEndDate ? new Date(`${customEndDate}T23:59:59.999`) : new Date(8640000000000000);
-      return date >= start && date <= end;
+      if (customStartDate && txDateStr < customStartDate) return false;
+      if (customEndDate && txDateStr > customEndDate) return false;
+      return true;
     }
 
     return true;
   };
 
   const filteredSales = useMemo(() => {
-    return sales.filter((s) => filterByDate(s.created_at));
+    return sales.filter((s) => isValidSale(s) && filterByDate(s.created_at));
   }, [sales, dateFilter, selectedMonth, selectedYear, customStartDate, customEndDate]);
 
   const filteredExpenses = useMemo(() => {
@@ -267,14 +263,18 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     for (const sale of filteredSales) {
       if (sale.items && Array.isArray(sale.items) && sale.items.length > 0) {
         for (const it of sale.items) {
-          cost += (it.cost_price || 0) * (it.qty_kg || 0);
+          cost += (Number(it.cost_price) || 0) * (Number(it.qty_kg || it.qty) || 0);
+        }
+      } else if (sale.sale_items && Array.isArray(sale.sale_items) && sale.sale_items.length > 0) {
+        for (const it of sale.sale_items) {
+          cost += (Number(it.cost_price) || 0) * (Number(it.qty_kg || it.qty) || 0);
         }
       } else {
         cost += (Number(sale.total_amount) || 0) * 0.8;
       }
     }
     return cost;
-  }, [filteredSales, totalRevenue]);
+  }, [filteredSales]);
 
   const totalGrossProfit = Math.max(0, totalRevenue - totalCost);
 
@@ -828,6 +828,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
             sales={sales}
             expenses={expenses}
             onOpenBEPModal={() => setIsBEPModalOpen(true)}
+            onRefresh={onRefresh}
           />
 
           {/* Payment Method Distribution & Wallet Glance */}
