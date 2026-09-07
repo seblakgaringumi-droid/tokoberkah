@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Package, 
   Plus, 
@@ -15,10 +15,19 @@ import {
   Sparkles,
   ArrowUpDown,
   Image as ImageIcon,
-  FileText
+  FileText,
+  PlusCircle,
+  MinusCircle,
+  Wallet,
+  Coins,
+  Building2,
+  ShoppingBag,
+  Info,
+  ArrowRight
 } from 'lucide-react';
-import { Product, StoreProfile } from '../../types';
+import { Product, StoreProfile, Expense } from '../../types';
 import { formatRupiah, playBeep, formatStock, roundStock } from '../../lib/utils';
+import { useFinance } from '../../context/FinanceContext';
 import { ProductImageUploader } from './ProductImageUploader';
 import { KatalogModal } from '../Katalog/KatalogModal';
 import { 
@@ -26,6 +35,7 @@ import {
   updateProduct, 
   deleteProduct, 
   adjustProductStock, 
+  createExpense,
   seedInitialProductsIfEmpty 
 } from '../../services/api';
 
@@ -33,9 +43,17 @@ interface StokViewProps {
   products: Product[];
   onRefresh: () => Promise<void>;
   storeProfile?: StoreProfile;
+  kasTokoBalance?: number;
+  onExpenseCreated?: (expense: Expense) => void;
 }
 
-export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storeProfile }) => {
+export const StokView: React.FC<StokViewProps> = ({ 
+  products, 
+  onRefresh, 
+  storeProfile,
+  kasTokoBalance,
+  onExpenseCreated
+}) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('Semua');
   const [filterLowStockOnly, setFilterLowStockOnly] = useState(false);
@@ -43,11 +61,28 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [isStockAdjustModalOpen, setIsStockAdjustModalOpen] = useState<Product | null>(null);
-  const [stockDelta, setStockDelta] = useState<number | string>('');
   const [isKatalogModalOpen, setIsKatalogModalOpen] = useState(false);
 
-  // Form state
+  // 1. Restock / Tambah Stok Modal State
+  const [isRestockModalOpen, setIsRestockModalOpen] = useState<Product | null>(null);
+  const [restockQty, setRestockQty] = useState<number | string>('');
+  const [restockCostPrice, setRestockCostPrice] = useState<number | string>('');
+  const [restockTotalCost, setRestockTotalCost] = useState<number | string>('');
+  const [restockUpdateCostPrice, setRestockUpdateCostPrice] = useState(true);
+  const [fundingSource, setFundingSource] = useState<'KAS_TOKO' | 'TAMBAHAN_MODAL' | 'NON_BIAYA'>('KAS_TOKO');
+  const [restockNotes, setRestockNotes] = useState('');
+
+  // 2. Reduce / Hapus Stok Modal State
+  const [isReduceStockModalOpen, setIsReduceStockModalOpen] = useState<Product | null>(null);
+  const [reduceQty, setReduceQty] = useState<number | string>('');
+  const [reduceReason, setReduceReason] = useState<string>('RUSAK');
+  const [reduceNotes, setReduceNotes] = useState('');
+
+  // Legacy Quick Adjust (kept as lightweight fallback)
+  const [isStockAdjustModalOpen, setIsStockAdjustModalOpen] = useState<Product | null>(null);
+  const [stockDelta, setStockDelta] = useState<number | string>('');
+
+  // Form state for Master Product Add/Edit
   const [formData, setFormData] = useState<{
     name: string;
     category: string;
@@ -116,7 +151,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
     });
   }, [products, filterCategory, filterLowStockOnly, searchQuery]);
 
-  // Open add modal
+  // Open Add Product Master Modal
   const handleOpenAdd = () => {
     setFormData({
       name: '',
@@ -134,7 +169,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
     setIsAddModalOpen(true);
   };
 
-  // Open edit modal
+  // Open Edit Product Master Modal
   const handleOpenEdit = (p: Product) => {
     setEditingProduct(p);
     setFormData({
@@ -152,7 +187,33 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
     setErrorMessage(null);
   };
 
-  // Handle save (Add or Edit)
+  // Open Restock Modal
+  const handleOpenRestock = (p: Product) => {
+    setIsRestockModalOpen(p);
+    setRestockQty('');
+    setRestockCostPrice(p.cost_price || 0);
+    setRestockTotalCost(0);
+    setRestockUpdateCostPrice(true);
+    setFundingSource('KAS_TOKO');
+    setRestockNotes('');
+  };
+
+  // Auto calculate total cost when qty or cost price changes
+  const handleQtyOrCostChange = (newQty: number | string, newUnitPrice: number | string) => {
+    const q = Number(newQty) || 0;
+    const up = Number(newUnitPrice) || 0;
+    setRestockTotalCost(Math.round(q * up));
+  };
+
+  // Open Reduce/Delete Stock Modal
+  const handleOpenReduceStock = (p: Product) => {
+    setIsReduceStockModalOpen(p);
+    setReduceQty('');
+    setReduceReason('RUSAK');
+    setReduceNotes('');
+  };
+
+  // Handle Save Master Product (Add or Edit)
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name.trim()) {
@@ -206,9 +267,111 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
     }
   };
 
-  // Handle delete
+  // Handle Restock Submit (Pembelian Stok Baru)
+  const handleRestockSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isRestockModalOpen) return;
+
+    const qty = roundStock(Number(restockQty));
+    if (isNaN(qty) || qty <= 0) {
+      alert('Jumlah tambahan stok harus lebih dari 0');
+      return;
+    }
+
+    const unitPrice = Number(restockCostPrice) || 0;
+    const totalCost = Number(restockTotalCost) >= 0 ? Number(restockTotalCost) : Math.round(qty * unitPrice);
+
+    try {
+      setIsSubmitting(true);
+
+      // 1. Tambah stok di master produk
+      await adjustProductStock(isRestockModalOpen.id, qty);
+
+      // 2. Perbarui harga modal (HPP) jika dicentang dan ada perubahan
+      if (restockUpdateCostPrice && unitPrice > 0 && unitPrice !== isRestockModalOpen.cost_price) {
+        await updateProduct(isRestockModalOpen.id, {
+          cost_price: unitPrice,
+        });
+      }
+
+      // 3. Catat Pengeluaran Kas Sesuai Sumber Biaya yang Dipilih
+      if (fundingSource === 'KAS_TOKO' && totalCost > 0) {
+        // Sumber: Total Kas Toko (Tunai + QRIS / Laci) -> Memotong Kas Toko harian
+        const title = `Belanja Stok: ${isRestockModalOpen.name} (${qty} ${isRestockModalOpen.unit || 'pcs'})${restockNotes ? ` - ${restockNotes}` : ''}`;
+        const newExp = await createExpense({
+          title,
+          amount: totalCost,
+          category: 'Belanja Stok',
+          source: 'LACI',
+        });
+        if (onExpenseCreated) {
+          onExpenseCreated(newExp);
+        }
+      } else if (fundingSource === 'TAMBAHAN_MODAL' && totalCost > 0) {
+        // Sumber: Tambahan Modal / Kas Besar (Kas Pemilik) -> Tidak memotong Kas Toko laci harian
+        const title = `Belanja Stok (Tambahan Modal): ${isRestockModalOpen.name} (${qty} ${isRestockModalOpen.unit || 'pcs'})${restockNotes ? ` - ${restockNotes}` : ''}`;
+        const newExp = await createExpense({
+          title,
+          amount: totalCost,
+          category: 'Belanja Stok',
+          source: 'KAS_BESAR',
+        });
+        if (onExpenseCreated) {
+          onExpenseCreated(newExp);
+        }
+      }
+
+      playBeep('success');
+      setIsRestockModalOpen(null);
+      setRestockQty('');
+      setRestockNotes('');
+      await onRefresh();
+    } catch (err: any) {
+      console.error('Restock error:', err);
+      alert('Gagal menambah stok: ' + (err.message || 'Terjadi kesalahan'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handle Reduce / Hapus Stok Submit
+  const handleReduceStockSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isReduceStockModalOpen) return;
+
+    const qty = roundStock(Number(reduceQty));
+    if (isNaN(qty) || qty <= 0) {
+      alert('Jumlah pengurangan stok harus lebih dari 0');
+      return;
+    }
+
+    if (qty > isReduceStockModalOpen.stock_kg) {
+      const confirmExceed = window.confirm(
+        `Jumlah yang dikurangi (${qty}) lebih besar dari stok saat ini (${isReduceStockModalOpen.stock_kg}). Stok akan diset menjadi 0. Lanjutkan?`
+      );
+      if (!confirmExceed) return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      await adjustProductStock(isReduceStockModalOpen.id, -qty);
+
+      playBeep('beep');
+      setIsReduceStockModalOpen(null);
+      setReduceQty('');
+      setReduceNotes('');
+      await onRefresh();
+    } catch (err: any) {
+      console.error('Reduce stock error:', err);
+      alert('Gagal mengurangi stok: ' + (err.message || 'Terjadi kesalahan'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handle Delete Master Product
   const handleDeleteProduct = async (id: string, name: string) => {
-    if (!window.confirm(`Yakin ingin menghapus produk "${name}" dari database?`)) {
+    if (!window.confirm(`Yakin ingin menghapus produk "${name}" dari database? Tindakan ini akan menghapus produk dari master data.`)) {
       return;
     }
 
@@ -221,7 +384,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
     }
   };
 
-  // Handle quick stock adjustment
+  // Quick stock adjustment submit (legacy fallback)
   const handleStockAdjustmentSubmit = async () => {
     if (!isStockAdjustModalOpen) return;
     const delta = roundStock(Number(stockDelta));
@@ -235,13 +398,13 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
       setStockDelta('');
       await onRefresh();
     } catch (err: any) {
-      alert(`Gagal menambah stok: ${err.message}`);
+      alert(`Gagal menyesuaikan stok: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Handle auto seed
+  // Handle auto seed sample sembako
   const handleSeedProducts = async () => {
     try {
       setIsSeeding(true);
@@ -344,7 +507,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
           {/* Toggle Low stock filter */}
           <button
             onClick={() => setFilterLowStockOnly(!filterLowStockOnly)}
-            className={`px-4 py-2.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 transition-colors ${
+            className={`px-4 py-2.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 transition-colors cursor-pointer ${
               filterLowStockOnly
                 ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
                 : 'bg-gray-100 text-gray-700 border-transparent hover:bg-gray-200'
@@ -361,7 +524,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
             <button
               onClick={handleSeedProducts}
               disabled={isSeeding}
-              className="px-4 py-2.5 rounded-full border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
+              className="px-4 py-2.5 rounded-full border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
             >
               <Sparkles className="w-4 h-4 text-emerald-600" />
               <span>{isSeeding ? 'Memuat...' : 'Isi Contoh Sembako'}</span>
@@ -401,7 +564,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
                 <th className="px-4 py-3.5 text-right">Harga Jual</th>
                 <th className="px-4 py-3.5 text-center">Stok</th>
                 <th className="px-4 py-3.5 text-center">Status</th>
-                <th className="px-5 py-3.5 text-right">Aksi</th>
+                <th className="px-5 py-3.5 text-right min-w-[200px]">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -471,16 +634,6 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
                           >
                             {formatStock(p.stock_kg, p.unit || 'kg')}
                           </span>
-                          <button
-                            onClick={() => {
-                              setIsStockAdjustModalOpen(p);
-                              setStockDelta('');
-                            }}
-                            title="Tambah / Kurangi Stok"
-                            className="p-1 rounded-md text-gray-400 hover:text-[#2E7D32] hover:bg-emerald-50 transition-colors"
-                          >
-                            <ArrowUpDown className="w-3.5 h-3.5" />
-                          </button>
                         </div>
                       </td>
                       <td className="px-4 py-3.5 text-center">
@@ -493,17 +646,44 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
                       </td>
                       <td className="px-5 py-3.5 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          {/* 1. Tombol Tambah Stok / Restok */}
                           <button
+                            type="button"
+                            onClick={() => handleOpenRestock(p)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] border border-emerald-200 text-xs font-semibold transition-all active:scale-95 shadow-2xs cursor-pointer group"
+                            title="Tambah Stok / Pembelian Baru (Pilih sumber dana Kas Toko / Modal)"
+                          >
+                            <PlusCircle className="w-3.5 h-3.5 text-[#2E7D32] group-hover:scale-110 transition-transform" />
+                            <span className="hidden xl:inline">Tambah Stok</span>
+                          </button>
+
+                          {/* 2. Tombol Hapus / Kurangi Stok */}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenReduceStock(p)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold transition-all active:scale-95 shadow-2xs cursor-pointer group"
+                            title="Kurangi / Hapus Stok (Barang Rusak, Expired, Koreksi Fisik)"
+                          >
+                            <MinusCircle className="w-3.5 h-3.5 text-amber-600 group-hover:scale-110 transition-transform" />
+                            <span className="hidden xl:inline">Hapus Stok</span>
+                          </button>
+
+                          {/* 3. Tombol Edit Detail Produk */}
+                          <button
+                            type="button"
                             onClick={() => handleOpenEdit(p)}
-                            className="p-1.5 rounded-lg text-gray-500 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
-                            title="Edit Produk"
+                            className="p-1.5 rounded-lg text-gray-500 hover:text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer"
+                            title="Edit Detail Produk & Harga"
                           >
                             <Edit3 className="w-4 h-4" />
                           </button>
+
+                          {/* 4. Tombol Hapus Master Produk */}
                           <button
+                            type="button"
                             onClick={() => handleDeleteProduct(p.id, p.name)}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                            title="Hapus Produk"
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                            title="Hapus Produk dari Master Data"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -529,7 +709,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
               const isOut = p.stock_kg <= 0;
 
               return (
-                <div key={p.id} className="p-4 space-y-2">
+                <div key={p.id} className="p-4 space-y-2.5">
                   <div className="flex justify-between items-start gap-2">
                     <div className="flex items-center gap-3 min-w-0">
                       {p.image_url ? (
@@ -558,7 +738,7 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
                       </div>
                     </div>
                     <span
-                      className={`text-xs font-bold px-2 py-0.5 rounded-lg shrink-0 ${
+                      className={`text-xs font-bold px-2.5 py-1 rounded-lg shrink-0 ${
                         isOut
                           ? 'bg-rose-100 text-rose-800'
                           : isLow
@@ -583,27 +763,39 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                    <button
-                      onClick={() => {
-                        setIsStockAdjustModalOpen(p);
-                        setStockDelta('');
-                      }}
-                      className="text-xs text-[#2E7D32] font-semibold flex items-center gap-1 hover:underline cursor-pointer"
-                    >
-                      <ArrowUpDown className="w-3.5 h-3.5" />
-                      <span>Sesuaikan Stok</span>
-                    </button>
-                    <div className="flex items-center gap-2">
+                  {/* Mobile Action Buttons Group */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100">
+                    <div className="flex items-center gap-1.5">
                       <button
+                        type="button"
+                        onClick={() => handleOpenRestock(p)}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] border border-emerald-200 text-xs font-bold transition-all active:scale-95 shadow-2xs cursor-pointer"
+                      >
+                        <PlusCircle className="w-3.5 h-3.5 text-[#2E7D32]" />
+                        <span>+ Tambah Stok</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenReduceStock(p)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold transition-all active:scale-95 shadow-2xs cursor-pointer"
+                      >
+                        <MinusCircle className="w-3.5 h-3.5 text-amber-600" />
+                        <span>- Hapus Stok</span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
                         onClick={() => handleOpenEdit(p)}
-                        className="px-2.5 py-1 text-xs rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-100 cursor-pointer"
+                        className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-100 font-medium cursor-pointer"
                       >
                         Edit
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleDeleteProduct(p.id, p.name)}
-                        className="p-1 text-gray-400 hover:text-rose-600 cursor-pointer"
+                        className="p-1.5 text-gray-400 hover:text-rose-600 cursor-pointer"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -616,7 +808,454 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
         </div>
       </div>
 
-      {/* Add / Edit Product Modal */}
+      {/* ======================================================== */}
+      {/* 1. MODAL TAMBAH STOK / RESTOK DENGAN PILIHAN SUMBER BIAYA */}
+      {/* ======================================================== */}
+      {isRestockModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="bg-linear-to-r from-[#1B5E20] to-[#2E7D32] text-white px-5 py-4 flex items-center justify-between shrink-0 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center border border-white/20">
+                  <ShoppingBag className="w-5 h-5 text-emerald-100" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base sm:text-lg leading-tight">
+                    Tambah Stok / Pembelian Baru
+                  </h3>
+                  <p className="text-[11px] text-emerald-100/90 font-medium">
+                    {isRestockModalOpen.name} • Stok Sekarang: {formatStock(isRestockModalOpen.stock_kg, isRestockModalOpen.unit || 'kg')}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsRestockModalOpen(null)}
+                className="p-1.5 text-white/80 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleRestockSubmit} className="p-5 overflow-y-auto space-y-4 text-xs sm:text-sm">
+              {/* Product Quick Info Card */}
+              <div className="p-3.5 bg-emerald-50/60 rounded-xl border border-emerald-100 flex items-center justify-between text-xs">
+                <div className="space-y-0.5">
+                  <span className="text-gray-500 font-medium">Produk:</span>
+                  <p className="font-bold text-gray-900 text-sm truncate max-w-[200px] sm:max-w-xs">{isRestockModalOpen.name}</p>
+                </div>
+                <div className="text-right space-y-0.5">
+                  <span className="text-gray-500 font-medium">Stok Saat Ini:</span>
+                  <p className="font-bold text-emerald-900 font-mono text-sm">
+                    {formatStock(isRestockModalOpen.stock_kg, isRestockModalOpen.unit || 'kg')}
+                  </p>
+                </div>
+              </div>
+
+              {/* 1. Input Jumlah Pembelian */}
+              <div className="space-y-1.5">
+                <label className="block text-gray-800 font-bold">
+                  1. Jumlah Tambahan Stok ({isRestockModalOpen.unit || 'kg'}) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="any"
+                    min="0.001"
+                    required
+                    autoFocus
+                    placeholder={`Contoh: 10 ${isRestockModalOpen.unit || 'kg'}`}
+                    value={restockQty}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRestockQty(val);
+                      handleQtyOrCostChange(val, restockCostPrice);
+                    }}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-300 font-mono text-base font-bold text-gray-900 focus:border-[#2E7D32] focus:ring-2 focus:ring-emerald-500/20 outline-none"
+                  />
+                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-md">
+                    {isRestockModalOpen.unit || 'kg'}
+                  </span>
+                </div>
+
+                {/* Quick Add Presets */}
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[11px] text-gray-400 mr-1">Pilih Cepat:</span>
+                  {[5, 10, 20, 50, 100].map((val) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => {
+                        setRestockQty(val);
+                        handleQtyOrCostChange(val, restockCostPrice);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-gray-100 hover:bg-emerald-100 hover:text-emerald-900 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      +{val}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 2. Harga Beli Satuan & Total Biaya */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-gray-700 font-semibold mb-1">
+                    Harga Beli / HPP Satuan
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-bold">Rp</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={restockCostPrice}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setRestockCostPrice(val);
+                        handleQtyOrCostChange(restockQty, val);
+                      }}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-300 font-mono text-sm focus:border-[#2E7D32] outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-gray-700 font-semibold mb-1">
+                    Total Biaya Pembelian
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-bold">Rp</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={restockTotalCost}
+                      onChange={(e) => setRestockTotalCost(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-300 font-mono text-sm font-bold text-[#1B5E20] focus:border-[#2E7D32] outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Checkbox update HPP */}
+              <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-gray-600 bg-gray-50 p-2.5 rounded-xl border border-gray-200/80">
+                <input
+                  type="checkbox"
+                  checked={restockUpdateCostPrice}
+                  onChange={(e) => setRestockUpdateCostPrice(e.target.checked)}
+                  className="w-4 h-4 text-[#2E7D32] rounded focus:ring-emerald-500 cursor-pointer"
+                />
+                <span>Perbarui Harga Modal (HPP) produk di master data dengan harga baru ini</span>
+              </label>
+
+              {/* 3. Pilihan Sumber Biaya Pembelian (Kas Toko vs Tambahan Modal) */}
+              <div className="space-y-2 pt-2 border-t border-gray-100">
+                <div className="flex items-center justify-between">
+                  <label className="block text-gray-900 font-bold">
+                    2. Sumber Biaya Pembelian Stok <span className="text-rose-500">*</span>
+                  </label>
+                  {kasTokoBalance !== undefined && (
+                    <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      Kas Toko: {formatRupiah(kasTokoBalance)}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 gap-2.5">
+                  {/* Opsi 1: Total Kas Toko (Tunai + QRIS) */}
+                  <label 
+                    onClick={() => setFundingSource('KAS_TOKO')}
+                    className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 ${
+                      fundingSource === 'KAS_TOKO'
+                        ? 'border-[#2E7D32] bg-emerald-50/70 shadow-xs'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="fundingSource"
+                      checked={fundingSource === 'KAS_TOKO'}
+                      onChange={() => setFundingSource('KAS_TOKO')}
+                      className="mt-1 w-4 h-4 text-[#2E7D32] focus:ring-emerald-500 cursor-pointer"
+                    />
+                    <div className="space-y-0.5 flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-gray-900 text-xs sm:text-sm flex items-center gap-1.5">
+                          <Wallet className="w-4 h-4 text-[#2E7D32]" />
+                          Total Kas Toko (Tunai + QRIS)
+                        </span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-100 text-[#1B5E20]">
+                          Memotong Kas Toko
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-600 leading-relaxed">
+                        Biaya belanja sebesar <strong className="text-emerald-900">{formatRupiah(Number(restockTotalCost) || 0)}</strong> akan otomatis dicatat sebagai <em>Belanja Stok Laci</em> dan memotong saldo Kas Toko harian.
+                      </p>
+                    </div>
+                  </label>
+
+                  {/* Opsi 2: Tambahan Modal / Kas Besar (Kas Pemilik) */}
+                  <label 
+                    onClick={() => setFundingSource('TAMBAHAN_MODAL')}
+                    className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 ${
+                      fundingSource === 'TAMBAHAN_MODAL'
+                        ? 'border-blue-600 bg-blue-50/70 shadow-xs'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="fundingSource"
+                      checked={fundingSource === 'TAMBAHAN_MODAL'}
+                      onChange={() => setFundingSource('TAMBAHAN_MODAL')}
+                      className="mt-1 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <div className="space-y-0.5 flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-gray-900 text-xs sm:text-sm flex items-center gap-1.5">
+                          <Building2 className="w-4 h-4 text-blue-600" />
+                          Tambahan Modal / Kas Besar (Kas Pemilik)
+                        </span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-blue-100 text-blue-800">
+                          Kas Luar Toko
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-600 leading-relaxed">
+                        Menggunakan dana tambahan modal pemilik toko (Kas Besar). <strong>TIDAK memotong</strong> saldo Kas Toko laci harian.
+                      </p>
+                    </div>
+                  </label>
+
+                  {/* Opsi 3: Tanpa Biaya (Koreksi Opname / Bonus) */}
+                  <label 
+                    onClick={() => setFundingSource('NON_BIAYA')}
+                    className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 ${
+                      fundingSource === 'NON_BIAYA'
+                        ? 'border-purple-600 bg-purple-50/70 shadow-xs'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="fundingSource"
+                      checked={fundingSource === 'NON_BIAYA'}
+                      onChange={() => setFundingSource('NON_BIAYA')}
+                      className="mt-1 w-4 h-4 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                    />
+                    <div className="space-y-0.5 flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-gray-900 text-xs sm:text-sm flex items-center gap-1.5">
+                          <Package className="w-4 h-4 text-purple-600" />
+                          Tanpa Biaya / Koreksi Stok Opname
+                        </span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-purple-100 text-purple-800">
+                          Non-Kas
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-600 leading-relaxed">
+                        Hanya menambah jumlah stok fisik barang tanpa mencatat arus kas pengeluaran apapun.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* 4. Catatan / Supplier */}
+              <div>
+                <label className="block text-gray-700 font-semibold mb-1">
+                  Catatan / Nama Supplier (Opsional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Grosir Pasar Induk, Agen ABC, dll."
+                  value={restockNotes}
+                  onChange={(e) => setRestockNotes(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 text-xs sm:text-sm focus:border-[#2E7D32] outline-none"
+                />
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 bg-gray-50 border-t border-gray-200 -mx-5 -mb-5 flex gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsRestockModalOpen(null)}
+                  className="px-4 py-2.5 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-100 font-medium transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !restockQty || Number(restockQty) <= 0}
+                  className="px-5 py-2.5 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] disabled:bg-gray-300 text-white font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                >
+                  {isSubmitting ? (
+                    <span>Memproses...</span>
+                  ) : (
+                    <>
+                      <PlusCircle className="w-4 h-4" />
+                      <span>Konfirmasi Tambah Stok</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* 2. MODAL HAPUS / KURANGI STOK (BARANG RUSAK/EXPIRED/KOREKSI) */}
+      {/* ======================================================== */}
+      {isReduceStockModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="bg-linear-to-r from-amber-700 to-amber-600 text-white px-5 py-4 flex items-center justify-between shrink-0 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center border border-white/20">
+                  <MinusCircle className="w-5 h-5 text-amber-100" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base sm:text-lg leading-tight">
+                    Hapus / Kurangi Stok Produk
+                  </h3>
+                  <p className="text-[11px] text-amber-100/90 font-medium">
+                    {isReduceStockModalOpen.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsReduceStockModalOpen(null)}
+                className="p-1.5 text-white/80 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleReduceStockSubmit} className="p-5 overflow-y-auto space-y-4 text-xs sm:text-sm">
+              {/* Info Card */}
+              <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-gray-500 font-medium">Stok Tersedia:</span>
+                  <p className="font-bold text-amber-950 text-sm">{formatStock(isReduceStockModalOpen.stock_kg, isReduceStockModalOpen.unit || 'kg')}</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-gray-500 font-medium">Nilai HPP:</span>
+                  <p className="font-bold text-gray-700 font-mono text-sm">{formatRupiah(isReduceStockModalOpen.cost_price)}</p>
+                </div>
+              </div>
+
+              {/* Input Jumlah Pengurangan */}
+              <div className="space-y-1.5">
+                <label className="block text-gray-800 font-bold">
+                  Jumlah Stok yang Dihapus / Dikurangi ({isReduceStockModalOpen.unit || 'kg'}) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="any"
+                    min="0.001"
+                    required
+                    autoFocus
+                    placeholder={`Contoh: 2 ${isReduceStockModalOpen.unit || 'kg'}`}
+                    value={reduceQty}
+                    onChange={(e) => setReduceQty(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-300 font-mono text-base font-bold text-gray-900 focus:border-amber-600 focus:ring-2 focus:ring-amber-500/20 outline-none"
+                  />
+                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-md">
+                    {isReduceStockModalOpen.unit || 'kg'}
+                  </span>
+                </div>
+
+                {/* Quick Shortcuts */}
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[11px] text-gray-400 mr-1">Preset:</span>
+                  {[1, 2, 5, 10].map((val) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setReduceQty(val)}
+                      className="px-2.5 py-1 rounded-lg bg-gray-100 hover:bg-amber-100 hover:text-amber-900 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      -{val}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setReduceQty(isReduceStockModalOpen.stock_kg)}
+                    className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold border border-rose-200 transition-colors cursor-pointer"
+                  >
+                    Habiskan Semua
+                  </button>
+                </div>
+              </div>
+
+              {/* Alasan Pengurangan */}
+              <div>
+                <label className="block text-gray-700 font-semibold mb-1">
+                  Alasan Pengurangan / Penghapusan Stok
+                </label>
+                <select
+                  value={reduceReason}
+                  onChange={(e) => setReduceReason(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border border-gray-300 bg-white text-xs sm:text-sm font-medium focus:border-amber-600 outline-none cursor-pointer"
+                >
+                  <option value="RUSAK">Barang Rusak / Cacat (Damaged)</option>
+                  <option value="EXPIRED">Kadaluarsa / Basi (Expired)</option>
+                  <option value="HILANG_OPNAME">Selisih Hitungan / Hilang (Stock Opname)</option>
+                  <option value="RETUR">Retur Kembali ke Supplier</option>
+                  <option value="PRIBADI">Konsumsi / Pemakaian Pribadi Toko</option>
+                  <option value="LAINNYA">Alasan Lainnya</option>
+                </select>
+              </div>
+
+              {/* Catatan Tambahan */}
+              <div>
+                <label className="block text-gray-700 font-semibold mb-1">
+                  Catatan Keterangan (Opsional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Keterangan tambahan..."
+                  value={reduceNotes}
+                  onChange={(e) => setReduceNotes(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 text-xs sm:text-sm focus:border-amber-600 outline-none"
+                />
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 bg-gray-50 border-t border-gray-200 -mx-5 -mb-5 flex gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsReduceStockModalOpen(null)}
+                  className="px-4 py-2.5 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-100 font-medium transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !reduceQty || Number(reduceQty) <= 0}
+                  className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300 text-white font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                >
+                  {isSubmitting ? (
+                    <span>Memproses...</span>
+                  ) : (
+                    <>
+                      <MinusCircle className="w-4 h-4" />
+                      <span>Hapus / Kurangi Stok</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* 3. MODAL TAMBAH / EDIT MASTER PRODUK                     */}
+      {/* ======================================================== */}
       {(isAddModalOpen || editingProduct) && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs">
           <div className="bg-white rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
@@ -813,79 +1452,6 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
         </div>
       )}
 
-      {/* Quick Stock Adjust Modal */}
-      {isStockAdjustModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-xl space-y-4">
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className="font-bold text-gray-900">Sesuaikan Stok</h3>
-                <p className="text-xs text-gray-500">{isStockAdjustModalOpen.name}</p>
-              </div>
-              <button
-                onClick={() => setIsStockAdjustModalOpen(null)}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-3 bg-emerald-50 rounded-xl text-xs text-emerald-900 flex justify-between items-center">
-              <span>Stok Saat Ini:</span>
-              <span className="font-bold text-sm">
-                {formatStock(isStockAdjustModalOpen.stock_kg, isStockAdjustModalOpen.unit || 'kg')}
-              </span>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Tambah / Kurang Stok (Gunakan angka minus untuk mengurangi)
-              </label>
-              <input
-                type="number"
-                step="any"
-                placeholder="Contoh: 10 atau -5"
-                value={stockDelta}
-                onChange={(e) => setStockDelta(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-gray-300 font-mono text-sm focus:border-[#2E7D32] outline-none"
-              />
-            </div>
-
-            {/* Quick shortcuts */}
-            <div className="flex gap-2">
-              {[5, 10, 20, -1].map((val) => (
-                <button
-                  key={val}
-                  type="button"
-                  onClick={() => setStockDelta(val)}
-                  className="flex-1 py-1.5 bg-gray-100 hover:bg-emerald-100 hover:text-emerald-900 rounded-lg text-xs font-semibold text-gray-700 transition-colors"
-                >
-                  {val > 0 ? `+${val}` : val}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsStockAdjustModalOpen(null)}
-                className="flex-1 py-2.5 rounded-xl border border-gray-300 text-gray-700 text-xs font-semibold hover:bg-gray-100"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                disabled={isSubmitting || !stockDelta}
-                onClick={handleStockAdjustmentSubmit}
-                className="flex-1 py-2.5 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs font-bold transition-colors shadow-xs"
-              >
-                {isSubmitting ? 'Menyimpan...' : 'Perbarui Stok'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Katalog Produk Download & Print Modal */}
       <KatalogModal
         isOpen={isKatalogModalOpen}
@@ -896,3 +1462,4 @@ export const StokView: React.FC<StokViewProps> = ({ products, onRefresh, storePr
     </div>
   );
 };
+
