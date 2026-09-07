@@ -23,13 +23,16 @@ import {
   Building2,
   ShoppingBag,
   Info,
-  ArrowRight
+  ArrowRight,
+  ClipboardList,
+  Filter
 } from 'lucide-react';
 import { Product, StoreProfile, Expense } from '../../types';
 import { formatRupiah, playBeep, formatStock, roundStock } from '../../lib/utils';
 import { useFinance } from '../../context/FinanceContext';
 import { ProductImageUploader } from './ProductImageUploader';
 import { KatalogModal } from '../Katalog/KatalogModal';
+import { DaftarBelanjaModal } from './DaftarBelanjaModal';
 import { 
   createProduct, 
   updateProduct, 
@@ -56,12 +59,14 @@ export const StokView: React.FC<StokViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('Semua');
-  const [filterLowStockOnly, setFilterLowStockOnly] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'LOW' | 'OUT'>('ALL');
+  const [sortBy, setSortBy] = useState<'OUT_AND_LOWEST' | 'HIGHEST' | 'NAME_ASC' | 'CATEGORY'>('OUT_AND_LOWEST');
 
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isKatalogModalOpen, setIsKatalogModalOpen] = useState(false);
+  const [isDaftarBelanjaModalOpen, setIsDaftarBelanjaModalOpen] = useState(false);
 
   // 1. Restock / Tambah Stok Modal State
   const [isRestockModalOpen, setIsRestockModalOpen] = useState<Product | null>(null);
@@ -130,17 +135,26 @@ export const StokView: React.FC<StokViewProps> = ({
     return products.filter((p) => p.stock_kg <= 0).length;
   }, [products]);
 
-  // Filtered products
+  // Filtered and Sorted products
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
-      if (filterLowStockOnly && p.stock_kg > (p.min_stock || 10)) {
-        return false;
+    let list = products.filter((p) => {
+      // 1. Quick status filter
+      if (statusFilter === 'LOW') {
+        const isLow = (p.stock_kg || 0) <= (p.min_stock || 10);
+        if (!isLow) return false;
+      } else if (statusFilter === 'OUT') {
+        const isOut = (p.stock_kg || 0) <= 0;
+        if (!isOut) return false;
       }
+
+      // 2. Category filter
       if (filterCategory !== 'Semua' && p.category !== filterCategory) {
         return false;
       }
+
+      // 3. Search query
       if (searchQuery) {
-        const q = searchQuery.toLowerCase();
+        const q = searchQuery.toLowerCase().trim();
         return (
           p.name.toLowerCase().includes(q) ||
           p.category.toLowerCase().includes(q) ||
@@ -149,7 +163,50 @@ export const StokView: React.FC<StokViewProps> = ({
       }
       return true;
     });
-  }, [products, filterCategory, filterLowStockOnly, searchQuery]);
+
+    // 4. Sorting logic
+    return [...list].sort((a, b) => {
+      const aStock = a.stock_kg || 0;
+      const bStock = b.stock_kg || 0;
+      const aMin = a.min_stock || 10;
+      const bMin = b.min_stock || 10;
+
+      if (sortBy === 'OUT_AND_LOWEST') {
+        // Stock 0 always at the very top
+        const aIsOut = aStock <= 0;
+        const bIsOut = bStock <= 0;
+        if (aIsOut && !bIsOut) return -1;
+        if (!aIsOut && bIsOut) return 1;
+
+        // Low stock (< min_stock) next
+        const aIsLow = aStock <= aMin;
+        const bIsLow = bStock <= bMin;
+        if (aIsLow && !bIsLow) return -1;
+        if (!aIsLow && bIsLow) return 1;
+
+        // Then ascending stock quantity
+        if (aStock !== bStock) return aStock - bStock;
+        return a.name.localeCompare(b.name, 'id');
+      }
+
+      if (sortBy === 'HIGHEST') {
+        if (bStock !== aStock) return bStock - aStock;
+        return a.name.localeCompare(b.name, 'id');
+      }
+
+      if (sortBy === 'NAME_ASC') {
+        return a.name.localeCompare(b.name, 'id');
+      }
+
+      if (sortBy === 'CATEGORY') {
+        const catComp = a.category.localeCompare(b.category, 'id');
+        if (catComp !== 0) return catComp;
+        return a.name.localeCompare(b.name, 'id');
+      }
+
+      return 0;
+    });
+  }, [products, statusFilter, filterCategory, searchQuery, sortBy]);
 
   // Open Add Product Master Modal
   const handleOpenAdd = () => {
@@ -423,8 +480,15 @@ export const StokView: React.FC<StokViewProps> = ({
       {/* Metric Cards Banner */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Total Products */}
-        <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-emerald-50 text-[#2E7D32] flex items-center justify-center shrink-0">
+        <div 
+          onClick={() => setStatusFilter('ALL')}
+          className={`rounded-2xl p-4 border shadow-xs flex items-center gap-3 cursor-pointer transition-all ${
+            statusFilter === 'ALL'
+              ? 'bg-emerald-50/70 border-[#2E7D32] ring-2 ring-[#2E7D32]/20'
+              : 'bg-white border-gray-200 hover:border-emerald-300'
+          }`}
+        >
+          <div className="w-11 h-11 rounded-xl bg-emerald-100 text-[#2E7D32] flex items-center justify-center shrink-0">
             <Package className="w-6 h-6" />
           </div>
           <div>
@@ -446,9 +510,9 @@ export const StokView: React.FC<StokViewProps> = ({
 
         {/* Low Stock count */}
         <div 
-          onClick={() => setFilterLowStockOnly(!filterLowStockOnly)}
+          onClick={() => setStatusFilter(statusFilter === 'LOW' ? 'ALL' : 'LOW')}
           className={`rounded-2xl p-4 border shadow-xs flex items-center gap-3 cursor-pointer transition-all ${
-            filterLowStockOnly
+            statusFilter === 'LOW'
               ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-400/30'
               : 'bg-white border-gray-200 hover:border-amber-300'
           }`}
@@ -465,88 +529,170 @@ export const StokView: React.FC<StokViewProps> = ({
         </div>
 
         {/* Out of Stock count */}
-        <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-xs flex items-center gap-3">
+        <div 
+          onClick={() => setStatusFilter(statusFilter === 'OUT' ? 'ALL' : 'OUT')}
+          className={`rounded-2xl p-4 border shadow-xs flex items-center gap-3 cursor-pointer transition-all ${
+            statusFilter === 'OUT'
+              ? 'bg-rose-100 border-rose-400 ring-2 ring-rose-400/30'
+              : 'bg-white border-gray-200 hover:border-rose-300'
+          }`}
+        >
           <div className="w-11 h-11 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center shrink-0">
             <AlertCircle className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-xs font-medium text-gray-500">Stok Habis</p>
+            <p className="text-xs font-medium text-gray-500">Stok Habis (0)</p>
             <p className="text-lg sm:text-xl font-bold text-rose-900">{outOfStockCount} Produk</p>
           </div>
         </div>
       </div>
 
-      {/* Control Bar: Search, Category, and Add button */}
-      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-gray-200/80 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">
-        <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-          {/* Search Input */}
-          <div className="relative w-full sm:w-64">
-            <Search className="w-4 h-4 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Cari barang / barcode..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-11 pr-4 py-2.5 text-xs sm:text-sm rounded-full bg-gray-100 border-none text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-[#2E7D32] outline-none transition-all"
-            />
+      {/* Control Bar: Search, Category, Sorting, Quick Filters, and Action buttons */}
+      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-gray-200/80 shadow-xs space-y-4">
+        {/* Row 1: Search, Category, Sort Dropdown & Primary Actions */}
+        <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
+          <div className="flex flex-wrap items-center gap-2.5 flex-1">
+            {/* Search Input */}
+            <div className="relative w-full sm:w-60">
+              <Search className="w-4 h-4 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Cari barang / barcode..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-11 pr-4 py-2.5 text-xs sm:text-sm rounded-xl bg-gray-100 border-none text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-[#2E7D32] outline-none transition-all"
+              />
+            </div>
+
+            {/* Category Dropdown */}
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              className="px-3.5 py-2.5 text-xs sm:text-sm rounded-xl bg-gray-100 border-none text-gray-800 font-medium focus:ring-2 focus:ring-[#2E7D32] outline-none cursor-pointer"
+            >
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c === 'Semua' ? 'Semua Kategori' : c}
+                </option>
+              ))}
+            </select>
+
+            {/* Sort Dropdown Filter */}
+            <div className="flex items-center gap-1.5 bg-gray-100 px-3 py-1 rounded-xl">
+              <ArrowUpDown className="w-4 h-4 text-gray-500 shrink-0" />
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as any)}
+                className="py-1.5 text-xs sm:text-sm bg-transparent border-none text-gray-800 font-semibold focus:outline-none cursor-pointer"
+                title="Filter Pilihan Urutan Tampilan Stok"
+              >
+                <option value="OUT_AND_LOWEST">Stok Kosong & Terendah (Prioritas Belanja)</option>
+                <option value="HIGHEST">Stok Terbanyak</option>
+                <option value="NAME_ASC">Nama Produk (A - Z)</option>
+                <option value="CATEGORY">Kategori Produk</option>
+              </select>
+            </div>
           </div>
 
-          {/* Category Dropdown */}
-          <select
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value)}
-            className="px-4 py-2.5 text-xs sm:text-sm rounded-full bg-gray-100 border-none text-gray-800 focus:ring-2 focus:ring-[#2E7D32] outline-none cursor-pointer"
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c === 'Semua' ? 'Semua Kategori' : c}
-              </option>
-            ))}
-          </select>
+          {/* Action Buttons: Download Supplier Shopping List, Catalog & Add */}
+          <div className="flex flex-wrap items-center gap-2 justify-end shrink-0">
+            {products.length === 0 && (
+              <button
+                onClick={handleSeedProducts}
+                disabled={isSeeding}
+                className="px-4 py-2.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4 text-emerald-600" />
+                <span>{isSeeding ? 'Memuat...' : 'Isi Contoh Sembako'}</span>
+              </button>
+            )}
 
-          {/* Toggle Low stock filter */}
+            {/* Tombol Download Daftar Belanja Supplier */}
+            <button
+              type="button"
+              onClick={() => setIsDaftarBelanjaModalOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-[0.98] cursor-pointer"
+              title="Download & Cetak Daftar Belanja Supplier / Kulakan (PDF, Excel, WhatsApp)"
+            >
+              <ClipboardList className="w-4 h-4 text-white" />
+              <span>📋 Download Daftar Belanja Supplier</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsKatalogModalOpen(true)}
+              className="px-3.5 py-2.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] text-xs sm:text-sm font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-[0.98] cursor-pointer"
+              title="Download & Cetak Katalog Produk PDF Resmi Toko Berkah"
+            >
+              <FileText className="w-4 h-4 text-[#2E7D32]" />
+              <span>Cetak Katalog</span>
+            </button>
+
+            <button
+              onClick={handleOpenAdd}
+              className="px-4 py-2.5 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 shadow-xs transition-all active:scale-[0.98] cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Tambah Produk</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Row 2: Quick Status Filter Chips */}
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100">
+          <span className="text-xs font-bold text-gray-500 mr-1 flex items-center gap-1">
+            <Filter className="w-3.5 h-3.5" /> Filter Cepat:
+          </span>
+
+          {/* Chip 1: Semua Produk */}
           <button
-            onClick={() => setFilterLowStockOnly(!filterLowStockOnly)}
-            className={`px-4 py-2.5 rounded-full text-xs font-semibold border flex items-center gap-1.5 transition-colors cursor-pointer ${
-              filterLowStockOnly
-                ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
-                : 'bg-gray-100 text-gray-700 border-transparent hover:bg-gray-200'
+            type="button"
+            onClick={() => setStatusFilter('ALL')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              statusFilter === 'ALL'
+                ? 'bg-gray-900 text-white shadow-xs'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            <Package className="w-3.5 h-3.5" />
+            <span>Semua Produk</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${statusFilter === 'ALL' ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-700'}`}>
+              {products.length}
+            </span>
+          </button>
+
+          {/* Chip 2: Stok Menipis */}
+          <button
+            type="button"
+            onClick={() => setStatusFilter(statusFilter === 'LOW' ? 'ALL' : 'LOW')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              statusFilter === 'LOW'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
             }`}
           >
             <AlertTriangle className="w-3.5 h-3.5" />
-            <span>Hanya Stok Menipis</span>
+            <span>⚠️ Stok Menipis</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${statusFilter === 'LOW' ? 'bg-white/20 text-white' : 'bg-amber-200 text-amber-900'}`}>
+              {lowStockProducts.length}
+            </span>
           </button>
-        </div>
 
-        {/* Action Buttons: Add product & Auto Seed */}
-        <div className="flex items-center gap-2 w-full md:w-auto justify-end">
-          {products.length === 0 && (
-            <button
-              onClick={handleSeedProducts}
-              disabled={isSeeding}
-              className="px-4 py-2.5 rounded-full border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-emerald-600" />
-              <span>{isSeeding ? 'Memuat...' : 'Isi Contoh Sembako'}</span>
-            </button>
-          )}
-
+          {/* Chip 3: Stok Kosong (0) */}
           <button
             type="button"
-            onClick={() => setIsKatalogModalOpen(true)}
-            className="px-4 py-2.5 rounded-full border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] text-xs sm:text-sm font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-[0.98] cursor-pointer"
-            title="Download & Cetak Katalog Produk PDF Resmi Toko Berkah"
+            onClick={() => setStatusFilter(statusFilter === 'OUT' ? 'ALL' : 'OUT')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              statusFilter === 'OUT'
+                ? 'bg-rose-600 text-white shadow-xs'
+                : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
+            }`}
           >
-            <FileText className="w-4 h-4 text-[#2E7D32]" />
-            <span>Cetak / Download Katalog</span>
-          </button>
-
-          <button
-            onClick={handleOpenAdd}
-            className="px-5 py-2.5 rounded-full bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 shadow-xs transition-all active:scale-[0.98] cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Tambah Produk</span>
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span>❌ Stok Kosong (0)</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${statusFilter === 'OUT' ? 'bg-white/20 text-white' : 'bg-rose-200 text-rose-900'}`}>
+              {outOfStockCount}
+            </span>
           </button>
         </div>
       </div>
@@ -570,18 +716,27 @@ export const StokView: React.FC<StokViewProps> = ({
             <tbody className="divide-y divide-gray-100">
               {filteredProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-10 text-center text-gray-400">
-                    Tidak ada produk yang sesuai dengan pencarian atau filter.
+                  <td colSpan={7} className="px-5 py-10 text-center text-gray-400 font-medium">
+                    Tidak ada produk yang sesuai dengan pencarian atau filter saat ini.
                   </td>
                 </tr>
               ) : (
                 filteredProducts.map((p) => {
-                  const isLow = p.stock_kg <= (p.min_stock || 10);
-                  const isOut = p.stock_kg <= 0;
-                  const profitMargin = p.selling_price - p.cost_price;
+                  const isOut = (p.stock_kg || 0) <= 0;
+                  const isLow = !isOut && (p.stock_kg || 0) <= (p.min_stock || 10);
+                  const profitMargin = (p.selling_price || 0) - (p.cost_price || 0);
 
                   return (
-                    <tr key={p.id} className="hover:bg-gray-50/80 transition-colors">
+                    <tr 
+                      key={p.id} 
+                      className={`transition-colors ${
+                        isOut
+                          ? 'bg-red-50/80 hover:bg-red-100/70 border-l-4 border-l-rose-600'
+                          : isLow
+                          ? 'bg-amber-50/40 hover:bg-amber-100/50 border-l-4 border-l-amber-400'
+                          : 'hover:bg-gray-50/80'
+                      }`}
+                    >
                       <td className="px-5 py-3.5 font-medium text-gray-900">
                         <div className="flex items-center gap-3">
                           {p.image_url ? (
@@ -600,7 +755,14 @@ export const StokView: React.FC<StokViewProps> = ({
                             </div>
                           )}
                           <div className="min-w-0">
-                            <span className="font-semibold text-gray-900 block truncate">{p.name}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-gray-900 block truncate">{p.name}</span>
+                              {isOut && (
+                                <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] font-black uppercase tracking-wider">
+                                  HABIS
+                                </span>
+                              )}
+                            </div>
                             {p.barcode && (
                               <p className="text-[11px] text-gray-400 font-mono">Barcode: {p.barcode}</p>
                             )}
@@ -624,15 +786,26 @@ export const StokView: React.FC<StokViewProps> = ({
                       <td className="px-4 py-3.5 text-center">
                         <div className="inline-flex items-center gap-1.5">
                           <span
-                            className={`font-bold px-2 py-0.5 rounded-lg text-xs ${
+                            className={`font-bold px-2.5 py-1 rounded-lg text-xs ${
                               isOut
-                                ? 'bg-rose-100 text-rose-800'
+                                ? 'bg-red-100 text-red-800 border border-red-300 font-extrabold flex items-center gap-1'
                                 : isLow
-                                ? 'bg-amber-100 text-amber-800'
+                                ? 'bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1'
                                 : 'bg-emerald-100 text-emerald-800'
                             }`}
                           >
-                            {formatStock(p.stock_kg, p.unit || 'kg')}
+                            {isOut ? (
+                              <>
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" />
+                                <span>Stok Habis / 0 {p.unit || 'pcs'}</span>
+                              </>
+                            ) : isLow ? (
+                              <>
+                                <span>⚠️ {formatStock(p.stock_kg, p.unit || 'kg')}</span>
+                              </>
+                            ) : (
+                              formatStock(p.stock_kg, p.unit || 'kg')
+                            )}
                           </span>
                         </div>
                       </td>
@@ -701,15 +874,24 @@ export const StokView: React.FC<StokViewProps> = ({
         <div className="md:hidden divide-y divide-gray-100">
           {filteredProducts.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">
-              Tidak ada produk yang cocok dengan pencarian.
+              Tidak ada produk yang cocok dengan pencarian atau filter saat ini.
             </div>
           ) : (
             filteredProducts.map((p) => {
-              const isLow = p.stock_kg <= (p.min_stock || 10);
-              const isOut = p.stock_kg <= 0;
+              const isOut = (p.stock_kg || 0) <= 0;
+              const isLow = !isOut && (p.stock_kg || 0) <= (p.min_stock || 10);
 
               return (
-                <div key={p.id} className="p-4 space-y-2.5">
+                <div 
+                  key={p.id} 
+                  className={`p-4 space-y-2.5 transition-colors ${
+                    isOut 
+                      ? 'bg-red-50/60 border-l-4 border-l-rose-600' 
+                      : isLow 
+                      ? 'bg-amber-50/30 border-l-4 border-l-amber-400' 
+                      : ''
+                  }`}
+                >
                   <div className="flex justify-between items-start gap-2">
                     <div className="flex items-center gap-3 min-w-0">
                       {p.image_url ? (
@@ -740,13 +922,13 @@ export const StokView: React.FC<StokViewProps> = ({
                     <span
                       className={`text-xs font-bold px-2.5 py-1 rounded-lg shrink-0 ${
                         isOut
-                          ? 'bg-rose-100 text-rose-800'
+                          ? 'bg-red-100 text-red-800 border border-red-300 font-extrabold'
                           : isLow
-                          ? 'bg-amber-100 text-amber-800'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
                           : 'bg-emerald-100 text-emerald-800'
                       }`}
                     >
-                      {formatStock(p.stock_kg, p.unit || 'kg')}
+                      {isOut ? `Habis (0 ${p.unit || 'pcs'})` : isLow ? `⚠️ ${formatStock(p.stock_kg, p.unit || 'kg')}` : formatStock(p.stock_kg, p.unit || 'kg')}
                     </span>
                   </div>
 
@@ -1458,6 +1640,15 @@ export const StokView: React.FC<StokViewProps> = ({
         onClose={() => setIsKatalogModalOpen(false)}
         products={products}
         storeProfile={storeProfile}
+      />
+
+      {/* Daftar Belanja Supplier & Rekomendasi Kulakan Modal */}
+      <DaftarBelanjaModal
+        isOpen={isDaftarBelanjaModalOpen}
+        onClose={() => setIsDaftarBelanjaModalOpen(false)}
+        products={products}
+        storeProfile={storeProfile}
+        activeFilterType={statusFilter}
       />
     </div>
   );
