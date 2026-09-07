@@ -13,6 +13,7 @@ interface CetakLaporanModalProps {
   netProfit: number;
   initialCash: number;
   cashSales: number;
+  debtPaymentsCash?: number;
   operationalExpenses: number;
   stockExpenses: number;
   totalActualDrawerCash: number;
@@ -35,6 +36,7 @@ export const CetakLaporanModal: React.FC<CetakLaporanModalProps> = ({
   netProfit,
   initialCash,
   cashSales,
+  debtPaymentsCash = 0,
   operationalExpenses,
   stockExpenses,
   totalActualDrawerCash,
@@ -123,6 +125,12 @@ export const CetakLaporanModal: React.FC<CetakLaporanModalProps> = ({
                   <td className="py-1.5 text-emerald-800 font-medium">(+) Penjualan Tunai ({salesCount} Transaksi):</td>
                   <td className="py-1.5 text-right font-mono font-bold text-[#1B5E20]">+{formatRupiah(cashSales)}</td>
                 </tr>
+                {debtPaymentsCash > 0 && (
+                  <tr className="py-1">
+                    <td className="py-1.5 text-emerald-800 font-medium">(+) Pelunasan Utang Tunai Pelanggan:</td>
+                    <td className="py-1.5 text-right font-mono font-bold text-[#1B5E20]">+{formatRupiah(debtPaymentsCash)}</td>
+                  </tr>
+                )}
                 <tr className="py-1">
                   <td className="py-1.5 text-rose-800 font-medium">(-) Pengeluaran Operasional Harian:</td>
                   <td className="py-1.5 text-right font-mono font-bold text-rose-600">-{formatRupiah(operationalExpenses)}</td>
