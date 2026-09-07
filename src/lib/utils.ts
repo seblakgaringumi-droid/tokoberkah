@@ -1,4 +1,4 @@
-import { StoreWallet, Sale, Expense, StoreProfile } from '../types';
+import { StoreWallet, Sale, Expense, StoreProfile, DebtPayment } from '../types';
 
 export function formatRupiah(amount: number | string | null | undefined): string {
   const num = typeof amount === 'number' ? amount : Number(amount) || 0;
@@ -289,6 +289,10 @@ export interface DrawerCashBreakdown {
   initialCash: number;
   cashSales: number;
   qrisSales: number;
+  autoQrisSales: number;
+  debtPaymentsCash: number;
+  debtPaymentsQris: number;
+  totalDebtPayments: number;
   drawerOperationalExpenses: number;
   drawerStockExpenses: number;
   totalActualDrawerCash: number;
@@ -380,50 +384,87 @@ export function aggregateDailySales(transactionsList?: Sale[] | null): Record<st
 
 /**
  * Calculates real-time total physical drawer cash and total store cash (Kas Fisik & Total Kas Toko):
- * Formula Kas Toko: Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
- * Only transactions from the current day (today WIB) are included by default.
+ * Formula Kas Toko: Modal Awal + Penjualan Tunai + Saldo QRIS + Pelunasan Utang - Biaya Operasional - Belanja Stok Laci
+ * Only transactions from the current day (today WIB) are included by default, unless filterDate is provided.
  */
 export function calculateDrawerCash(
   wallet?: StoreWallet | null,
   sales?: Sale[] | null,
   expenses?: Expense[] | null,
-  manualQrisAdjustment?: number | null
+  manualQrisAdjustment?: number | null,
+  debtPayments?: DebtPayment[] | null,
+  filterDate?: string
 ): DrawerCashBreakdown {
   const initialCash = Number(wallet?.initial_cash) || 500000;
-  const todayStr = getLocalDate(new Date());
+  const targetDateStr = filterDate || getLocalDate(new Date());
 
-  const isToday = (dateStr?: string | null) => {
+  const isTargetDate = (dateStr?: string | null) => {
     if (!dateStr) return true; // Default optimistic for newly created in-memory records
-    return getLocalDate(dateStr) === todayStr;
+    return getLocalDate(dateStr) === targetDateStr;
   };
+
+  // If debtPayments not passed explicitly, attempt to load from local storage cache
+  let paymentsList = debtPayments;
+  if (!paymentsList && typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem('pos_debt_payments_cache');
+      paymentsList = raw ? JSON.parse(raw) : [];
+    } catch {
+      paymentsList = [];
+    }
+  }
 
   // 1. Penjualan Tunai (Cash Sales)
   const cashSales = (sales || [])
     .filter((s) => {
       if (!isValidSale(s)) return false;
-      if (!isToday(s.created_at)) return false;
+      if (!isTargetDate(s.created_at)) return false;
       const m = (s.payment_method || '').toUpperCase();
       return m === 'CASH' || m === 'TUNAI';
     })
     .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
 
-  // 1b. Saldo QRIS / Bank (Non-Tunai)
+  // 1b. Pelunasan Utang Pelanggan (Buku Utang / Piutang)
+  const validDebtPayments = (paymentsList || []).filter((p) => {
+    const isIncome = !p.type || p.type === 'INCOME_DEBT_PAYMENT';
+    return isIncome && isTargetDate(p.created_at);
+  });
+
+  // Pelunasan Utang Tunai (menambah kas laci)
+  const debtPaymentsCash = validDebtPayments
+    .filter((p) => {
+      const m = (p.payment_method || '').toUpperCase();
+      return m === 'TUNAI' || m === 'CASH';
+    })
+    .reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+
+  // Pelunasan Utang QRIS / Transfer (menambah saldo QRIS)
+  const debtPaymentsQris = validDebtPayments
+    .filter((p) => {
+      const m = (p.payment_method || '').toUpperCase();
+      return m === 'QRIS' || m === 'BANK' || m === 'TRANSFER' || m.includes('QRIS') || m.includes('TRANSFER');
+    })
+    .reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+
+  const totalDebtPayments = debtPaymentsCash + debtPaymentsQris;
+
+  // 1c. Saldo QRIS / Bank (Non-Tunai: Penjualan QRIS + Pelunasan Utang QRIS)
   const autoQrisSales = (sales || [])
     .filter((s) => {
       if (!isValidSale(s)) return false;
-      if (!isToday(s.created_at)) return false;
+      if (!isTargetDate(s.created_at)) return false;
       const m = (s.payment_method || '').toUpperCase();
       return m === 'QRIS' || m === 'BANK' || m === 'TRANSFER' || m === 'NON_TUNAI' || m.includes('QRIS') || m.includes('TRANSFER');
     })
-    .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
+    .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0) + debtPaymentsQris;
 
-  // Effective QRIS: manual override if explicitly provided / configured, otherwise auto from sales
+  // Effective QRIS: manual override if explicitly provided / configured, otherwise auto from sales + QRIS debt payments
   const qrisSales = manualQrisAdjustment !== undefined && manualQrisAdjustment !== null ? manualQrisAdjustment : autoQrisSales;
 
   // 2. Biaya Operasional Laci (Drawer Operational Expenses)
   const drawerOperationalExpenses = (expenses || [])
     .filter((e) => {
-      if (!isToday(e.created_at)) return false;
+      if (!isTargetDate(e.created_at)) return false;
       const isDrawer = (e.source || 'LACI').toUpperCase() === 'LACI';
       return isDrawer && !isStockExpense(e);
     })
@@ -432,22 +473,26 @@ export function calculateDrawerCash(
   // 3. Belanja Stok Laci (Drawer Stock Expenses)
   const drawerStockExpenses = (expenses || [])
     .filter((e) => {
-      if (!isToday(e.created_at)) return false;
+      if (!isTargetDate(e.created_at)) return false;
       const isDrawer = (e.source || 'LACI').toUpperCase() === 'LACI';
       return isDrawer && isStockExpense(e);
     })
     .reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
 
-  // Formula Fisik Laci: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
-  const totalActualDrawerCash = initialCash + cashSales - drawerOperationalExpenses - drawerStockExpenses;
+  // Formula Fisik Laci: Modal Awal + Penjualan Tunai + Pelunasan Utang Tunai - Biaya Operasional Laci - Belanja Stok Laci
+  const totalActualDrawerCash = initialCash + cashSales + debtPaymentsCash - drawerOperationalExpenses - drawerStockExpenses;
 
-  // Formula Total Kas Toko: Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
-  const totalKasToko = initialCash + cashSales + qrisSales - drawerOperationalExpenses - drawerStockExpenses;
+  // Formula Total Kas Toko: Modal Awal + Penjualan Tunai + Saldo QRIS + Pelunasan Utang - Biaya Operasional - Belanja Stok Laci
+  const totalKasToko = initialCash + cashSales + qrisSales + debtPaymentsCash - drawerOperationalExpenses - drawerStockExpenses;
 
   return {
     initialCash,
     cashSales,
     qrisSales,
+    autoQrisSales,
+    debtPaymentsCash,
+    debtPaymentsQris,
+    totalDebtPayments,
     drawerOperationalExpenses,
     drawerStockExpenses,
     totalActualDrawerCash,
