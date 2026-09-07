@@ -288,9 +288,11 @@ export function isStockExpense(exp?: { category?: string; title?: string; amount
 export interface DrawerCashBreakdown {
   initialCash: number;
   cashSales: number;
+  qrisSales: number;
   drawerOperationalExpenses: number;
   drawerStockExpenses: number;
   totalActualDrawerCash: number;
+  totalKasToko: number;
 }
 
 /**
@@ -404,6 +406,16 @@ export function calculateDrawerCash(
     })
     .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
 
+  // 1b. Saldo QRIS / Bank (Non-Tunai)
+  const qrisSales = (sales || [])
+    .filter((s) => {
+      if (!isValidSale(s)) return false;
+      if (!isToday(s.created_at)) return false;
+      const m = (s.payment_method || '').toUpperCase();
+      return m === 'QRIS' || m === 'BANK' || m === 'TRANSFER' || m === 'NON_TUNAI' || m.includes('QRIS') || m.includes('TRANSFER');
+    })
+    .reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
+
   // 2. Biaya Operasional Laci (Drawer Operational Expenses)
   const drawerOperationalExpenses = (expenses || [])
     .filter((e) => {
@@ -422,15 +434,20 @@ export function calculateDrawerCash(
     })
     .reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
 
-  // Formula: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
+  // Formula Fisik Laci: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
   const totalActualDrawerCash = initialCash + cashSales - drawerOperationalExpenses - drawerStockExpenses;
+
+  // Formula Total Kas Toko: Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
+  const totalKasToko = initialCash + cashSales + qrisSales - drawerOperationalExpenses - drawerStockExpenses;
 
   return {
     initialCash,
     cashSales,
+    qrisSales,
     drawerOperationalExpenses,
     drawerStockExpenses,
     totalActualDrawerCash,
+    totalKasToko,
   };
 }
 
