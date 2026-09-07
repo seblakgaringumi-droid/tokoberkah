@@ -294,9 +294,92 @@ export interface DrawerCashBreakdown {
 }
 
 /**
+ * Formats any date input into YYYY-MM-DD based on Asia/Jakarta timezone (WIB).
+ * Example output: '2026-09-07'
+ */
+export function getLocalDate(dateInput?: string | Date | number | null): string {
+  if (!dateInput) return '';
+  const d = typeof dateInput === 'string' || typeof dateInput === 'number' ? new Date(dateInput) : dateInput;
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Jakarta' }); // Output: YYYY-MM-DD
+}
+
+/**
+ * Checks if a sale/transaction is valid (CASH, QRIS, UTANG/BON, ONLINE).
+ * Valid statuses: PAID, SUCCESS, COMPLETED, UNPAID, PARTIAL, or unset.
+ * Excludes cancelled or voided transactions: CANCELLED, BATAL, VOID, FAILED.
+ */
+export function isValidSale(sale?: Sale | null): boolean {
+  if (!sale) return false;
+  const status = (sale.status || 'PAID').toUpperCase().trim();
+  const invalidStatuses = ['CANCELLED', 'BATAL', 'VOID', 'FAILED'];
+  if (invalidStatuses.includes(status)) return false;
+  return true;
+}
+
+export interface DailySalesAggregation {
+  omzet: number;
+  revenue: number;
+  cost: number;
+  profit: number;
+  grossProfit: number;
+  count: number;
+}
+
+/**
+ * Aggregates transactions list by local date (WIB / Asia/Jakarta)
+ */
+export function aggregateDailySales(transactionsList?: Sale[] | null): Record<string, DailySalesAggregation> {
+  const dailyData: Record<string, DailySalesAggregation> = {};
+
+  (transactionsList || []).forEach((tx) => {
+    if (!isValidSale(tx) || !tx.created_at) return;
+    const txDate = getLocalDate(tx.created_at);
+    if (!txDate) return;
+
+    const amount = Number(tx.total_amount || 0);
+
+    let saleCost = 0;
+    if (tx.items && Array.isArray(tx.items) && tx.items.length > 0) {
+      for (const it of tx.items) {
+        saleCost += (Number(it.cost_price) || 0) * (Number(it.qty_kg || it.qty) || 0);
+      }
+    } else if (tx.sale_items && Array.isArray(tx.sale_items) && tx.sale_items.length > 0) {
+      for (const it of tx.sale_items) {
+        saleCost += (Number(it.cost_price) || 0) * (Number(it.qty_kg || it.qty) || 0);
+      }
+    } else {
+      saleCost = amount * 0.8;
+    }
+
+    const profit = Math.max(0, amount - saleCost);
+
+    if (!dailyData[txDate]) {
+      dailyData[txDate] = {
+        omzet: 0,
+        revenue: 0,
+        cost: 0,
+        profit: 0,
+        grossProfit: 0,
+        count: 0,
+      };
+    }
+
+    dailyData[txDate].omzet += amount;
+    dailyData[txDate].revenue += amount;
+    dailyData[txDate].cost += saleCost;
+    dailyData[txDate].profit += profit;
+    dailyData[txDate].grossProfit += profit;
+    dailyData[txDate].count += 1;
+  });
+
+  return dailyData;
+}
+
+/**
  * Calculates real-time total physical drawer cash (Kas Fisik Aktual Laci):
  * Formula: Modal Awal + Penjualan Tunai - Biaya Operasional Laci - Belanja Stok Laci
- * Only transactions from the current day (today) are included.
+ * Only transactions from the current day (today WIB) are included.
  */
 export function calculateDrawerCash(
   wallet?: StoreWallet | null,
@@ -304,21 +387,17 @@ export function calculateDrawerCash(
   expenses?: Expense[] | null
 ): DrawerCashBreakdown {
   const initialCash = Number(wallet?.initial_cash) || 500000;
-
-  const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  const todayStr = getLocalDate(new Date());
 
   const isToday = (dateStr?: string | null) => {
     if (!dateStr) return true; // Default optimistic for newly created in-memory records
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return true;
-    return d >= startOfDay && d <= endOfDay;
+    return getLocalDate(dateStr) === todayStr;
   };
 
   // 1. Penjualan Tunai (Cash Sales)
   const cashSales = (sales || [])
     .filter((s) => {
+      if (!isValidSale(s)) return false;
       if (!isToday(s.created_at)) return false;
       const m = (s.payment_method || '').toUpperCase();
       return m === 'CASH' || m === 'TUNAI';
