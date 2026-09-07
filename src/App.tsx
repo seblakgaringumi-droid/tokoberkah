@@ -54,6 +54,7 @@ export default function App() {
   const [storeProfile, setStoreProfile] = useState<StoreProfile>(DEFAULT_STORE_PROFILE);
   const [isStoreSettingsOpen, setIsStoreSettingsOpen] = useState(false);
   const [isGlobalCatalogOpen, setIsGlobalCatalogOpen] = useState(false);
+  const [cartCount, setCartCount] = useState<number>(0);
 
   // Web Notification Permission State
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(() => {
@@ -244,8 +245,6 @@ export default function App() {
       supabase.removeChannel(financesChannel);
     };
   }, []);
-
-  const [cartCount, setCartCount] = useState<number>(0);
 
   // Derived Badges Counters (Safe with null-checks)
   const lowStockCount = (products || []).filter((p) => p && Number(p.stock_kg || 0) <= (p.min_stock || 10)).length;
