@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   X, 
   Printer, 
@@ -16,25 +16,29 @@ import {
   MessageCircle,
   Trash2
 } from 'lucide-react';
-import { Sale, SaleItem } from '../../types';
-import { formatRupiah, formatDateTime, formatStock, formatStockWithAlias } from '../../lib/utils';
+import { Sale, SaleItem, DebtCredit } from '../../types';
+import { formatRupiah, formatDateTime, formatStock, formatStockWithAlias, playBeep } from '../../lib/utils';
 import { supabase } from '../../lib/supabase';
-import { deleteSaleItem } from '../../services/api';
+import { deleteSaleItem, getSaleDebtInfo, recordDebtPayment } from '../../services/api';
 
 interface DetailStrukModalProps {
   isOpen: boolean;
   onClose: () => void;
   sale: Sale | null;
+  debts?: DebtCredit[];
   onPrintReceipt: (sale: Sale) => void;
   onSaleUpdated?: (updatedSale: Sale) => void;
+  onDebtPaid?: (payment: any) => void;
 }
 
 export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
   isOpen,
   onClose,
   sale,
+  debts = [],
   onPrintReceipt,
   onSaleUpdated,
+  onDebtPaid,
 }) => {
   const [copied, setCopied] = useState(false);
   const [loadedItems, setLoadedItems] = useState<SaleItem[]>([]);
@@ -43,6 +47,12 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [restoreStock, setRestoreStock] = useState(true);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // State untuk Quick Pay Utang langsung dari struk
+  const [showPayForm, setShowPayForm] = useState(false);
+  const [payAmount, setPayAmount] = useState<number | string>('');
+  const [payMethod, setPayMethod] = useState<'TUNAI' | 'QRIS'>('TUNAI');
+  const [isPayingDebt, setIsPayingDebt] = useState(false);
 
   useEffect(() => {
     setCurrentSale(sale);
@@ -244,6 +254,75 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
     }
   };
 
+  // Sinkronisasi status utang/piutang secara real-time dari data buku utang
+  const utangInfo = useMemo(() => {
+    return getSaleDebtInfo(activeSale, debts);
+  }, [activeSale, debts]);
+
+  // Handler untuk pelunasan utang langsung dari struk
+  const handleInlinePayDebt = async () => {
+    if (!utangInfo.matchingDebt) {
+      setNotification({
+        type: 'error',
+        message: 'Catatan utang tidak ditemukan di buku utang.',
+      });
+      return;
+    }
+
+    const payNominal = Number(payAmount);
+    if (isNaN(payNominal) || payNominal <= 0) {
+      setNotification({
+        type: 'error',
+        message: 'Masukkan nominal pembayaran yang valid!',
+      });
+      return;
+    }
+
+    try {
+      setIsPayingDebt(true);
+      const isFullPay = payNominal >= utangInfo.remainingAmount;
+      const newStatus = isFullPay ? 'paid' : 'partial';
+
+      const newPayment = await recordDebtPayment({
+        debt_id: utangInfo.matchingDebt.id,
+        customer_name: utangInfo.matchingDebt.customer_or_supplier_name,
+        amount: payNominal,
+        payment_method: payMethod,
+        notes: `Pelunasan piutang pelanggan via Struk (${payMethod}): ${utangInfo.matchingDebt.customer_or_supplier_name}`,
+      });
+
+      playBeep('success');
+
+      // Update state lokal sale
+      const updated = {
+        ...activeSale,
+        status: newStatus,
+      };
+      setCurrentSale(updated);
+      if (onSaleUpdated) {
+        onSaleUpdated(updated);
+      }
+      if (onDebtPaid) {
+        onDebtPaid(newPayment);
+      }
+
+      setShowPayForm(false);
+      setNotification({
+        type: 'success',
+        message: isFullPay
+          ? 'Alhamdulillah! Pembayaran berhasil dan status struk kini LUNAS.'
+          : `Pembayaran ${formatRupiah(payNominal)} berhasil dicatat! Sisa piutang: ${formatRupiah(Math.max(0, utangInfo.remainingAmount - payNominal))}`,
+      });
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: `Gagal memproses pembayaran: ${err.message}`,
+      });
+    } finally {
+      setIsPayingDebt(false);
+    }
+  };
+
   const getPaymentBadge = (method: string) => {
     const m = (method || '').toUpperCase();
     if (m === 'COD' || m.includes('COD') || m.includes('BAYAR DI TEMPAT')) {
@@ -271,9 +350,21 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
       };
     }
     if (m === 'UTANG') {
+      if (utangInfo.isLunas) {
+        return {
+          label: 'Utang / Bon (Lunas)',
+          bg: 'bg-emerald-50 text-[#1B5E20] border-emerald-300 font-bold',
+        };
+      }
+      if (utangInfo.isPartial) {
+        return {
+          label: 'Utang / Bon (Dicicil)',
+          bg: 'bg-blue-50 text-blue-800 border-blue-200 font-bold',
+        };
+      }
       return {
-        label: 'Utang / Bon',
-        bg: 'bg-amber-50 text-amber-800 border-amber-200',
+        label: 'Utang / Bon (Belum Lunas)',
+        bg: 'bg-amber-50 text-amber-800 border-amber-300 font-bold',
       };
     }
     return {
@@ -298,8 +389,14 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
               <p className="text-xs text-emerald-100/90 flex items-center gap-1.5 mt-0.5">
                 <span>Nota {displayId}</span>
                 <span>•</span>
-                <span className="font-medium text-emerald-200">
-                  {isUtang ? 'Belum Lunas (Utang)' : 'Transaksi Lunas'}
+                <span className={`font-semibold ${utangInfo.isLunas ? 'text-emerald-300' : utangInfo.isPartial ? 'text-blue-200' : 'text-amber-200'}`}>
+                  {isUtang 
+                    ? (utangInfo.isLunas 
+                        ? 'Lunas (Utang Selesai)' 
+                        : utangInfo.isPartial 
+                        ? `Dicicil (Sisa: ${formatRupiah(utangInfo.remainingAmount)})`
+                        : 'Belum Lunas (Utang)')
+                    : 'Transaksi Lunas'}
                 </span>
               </p>
             </div>
@@ -522,11 +619,136 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
             )}
 
             {isUtang && (
-              <div className="mt-2 p-2 bg-amber-100/70 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
-                <span className="font-semibold">
-                  Status Transaksi: BON / PIUTANG BELUM LUNAS
-                </span>
+              <div className="mt-3 space-y-2">
+                {utangInfo.isLunas ? (
+                  <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-2xl text-emerald-900 text-xs flex items-center justify-between gap-2 shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold block">Status Transaksi: PIUTANG TELAH LUNAS</span>
+                        <span className="text-[11px] text-emerald-700">Tagihan nota ini sudah dibayar penuh (Sisa: Rp 0)</span>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-200/80 text-emerald-900 font-bold text-[10px]">
+                      LUNAS
+                    </span>
+                  </div>
+                ) : utangInfo.isPartial ? (
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-2xl text-blue-900 text-xs flex items-center justify-between gap-2 shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-blue-600 shrink-0" />
+                      <div>
+                        <span className="font-bold block">Status Transaksi: DICICIL SEBAGIAN</span>
+                        <span className="text-[11px] text-blue-700">Sisa Tagihan: {formatRupiah(utangInfo.remainingAmount)}</span>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-blue-200/80 text-blue-900 font-bold text-[10px]">
+                      DICICIL
+                    </span>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl text-amber-900 text-xs flex items-center justify-between gap-2 shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                      <div>
+                        <span className="font-bold block">Status Transaksi: BON / PIUTANG BELUM LUNAS</span>
+                        <span className="text-[11px] text-amber-800">Sisa Tagihan: {formatRupiah(utangInfo.remainingAmount || activeSale.total_amount)}</span>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-200/80 text-amber-900 font-bold text-[10px]">
+                      BELUM LUNAS
+                    </span>
+                  </div>
+                )}
+
+                {/* Quick Inline Payment Option jika Belum Lunas / Dicicil */}
+                {!utangInfo.isLunas && utangInfo.matchingDebt && (
+                  <div className="p-3 bg-white border border-gray-200 rounded-2xl space-y-2.5 shadow-2xs mt-2">
+                    {!showPayForm ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-gray-600">Catatan utang terhubung di Buku Utang Toko</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPayForm(true);
+                            setPayAmount(utangInfo.remainingAmount);
+                          }}
+                          className="px-3 py-1.5 bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs font-bold rounded-xl transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer active:scale-95 shrink-0"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>Bayar / Lunasi Utang Ini</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5 pt-1">
+                        <div className="flex items-center justify-between pb-1 border-b border-gray-100">
+                          <span className="text-xs font-bold text-gray-800">Pelunasan Utang Nota Ini</span>
+                          <button
+                            type="button"
+                            onClick={() => setShowPayForm(false)}
+                            className="text-gray-400 hover:text-gray-600 text-xs cursor-pointer"
+                          >
+                            Batal
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <label className="block text-gray-600 font-medium mb-1">Nominal Bayar (Rp):</label>
+                            <input
+                              type="number"
+                              value={payAmount}
+                              onChange={(e) => setPayAmount(e.target.value)}
+                              placeholder="Nominal"
+                              className="w-full px-3 py-1.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#2E7D32]/30 font-bold text-gray-900"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-gray-600 font-medium mb-1">Metode Masuk Kas:</label>
+                            <div className="flex gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setPayMethod('TUNAI')}
+                                className={`flex-1 py-1.5 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                                  payMethod === 'TUNAI'
+                                    ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
+                                    : 'bg-gray-50 text-gray-700 border-gray-200'
+                                }`}
+                              >
+                                Tunai
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPayMethod('QRIS')}
+                                className={`flex-1 py-1.5 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                                  payMethod === 'QRIS'
+                                    ? 'bg-blue-600 text-white border-blue-600'
+                                    : 'bg-gray-50 text-gray-700 border-gray-200'
+                                }`}
+                              >
+                                QRIS
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isPayingDebt}
+                          onClick={handleInlinePayDebt}
+                          className="w-full py-2 bg-[#2E7D32] hover:bg-[#1B5E20] disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          {isPayingDebt ? (
+                            <span>Memproses Pembayaran...</span>
+                          ) : (
+                            <>
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>Konfirmasi Bayar & Update Status Otomatis</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -546,6 +768,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
             onClick={() => {
               onPrintReceipt({
                 ...activeSale,
+                status: utangInfo.isLunas ? 'paid' : (utangInfo.isPartial ? 'partial' : activeSale.status),
                 items: items,
                 sale_items: items,
               });
@@ -560,6 +783,7 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
             onClick={() => {
               onPrintReceipt({
                 ...activeSale,
+                status: utangInfo.isLunas ? 'paid' : (utangInfo.isPartial ? 'partial' : activeSale.status),
                 items: items,
                 sale_items: items,
               });
