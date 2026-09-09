@@ -104,11 +104,19 @@ export async function fetchProducts(): Promise<Product[]> {
         ? dbImg 
         : (cachedImg && !cachedImg.startsWith('blob:') ? cachedImg : null);
 
+      const roundedStock = typeof p.stock_kg === 'number' ? roundStock(p.stock_kg, p.unit) : p.stock_kg;
+      const roundedMinStock = typeof p.min_stock === 'number' ? roundStock(p.min_stock, p.unit) : p.min_stock;
+
+      // Auto-reconcile / repair stock with excessive decimals directly in database
+      if (typeof p.stock_kg === 'number' && p.stock_kg !== roundedStock) {
+        supabase.from('products').update({ stock_kg: roundedStock }).eq('id', p.id).then();
+      }
+
       return {
         ...p,
         image_url: chosenImg,
-        stock_kg: typeof p.stock_kg === 'number' ? roundStock(p.stock_kg) : p.stock_kg,
-        min_stock: typeof p.min_stock === 'number' ? roundStock(p.min_stock) : p.min_stock,
+        stock_kg: roundedStock,
+        min_stock: roundedMinStock,
       };
     });
 
@@ -136,8 +144,8 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
   const cleanPayload = {
     ...product,
     image_url: cleanImageUrl,
-    stock_kg: roundStock(Number(product.stock_kg) || 0),
-    min_stock: roundStock(Number(product.min_stock) || 0),
+    stock_kg: roundStock(Number(product.stock_kg) || 0, product.unit),
+    min_stock: roundStock(Number(product.min_stock) || 0, product.unit),
   };
 
   const tempId = `prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -194,10 +202,10 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
 export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product> {
   const cleanUpdates = { ...updates };
   if (cleanUpdates.stock_kg !== undefined) {
-    cleanUpdates.stock_kg = roundStock(Number(cleanUpdates.stock_kg) || 0);
+    cleanUpdates.stock_kg = roundStock(Number(cleanUpdates.stock_kg) || 0, cleanUpdates.unit);
   }
   if (cleanUpdates.min_stock !== undefined) {
-    cleanUpdates.min_stock = roundStock(Number(cleanUpdates.min_stock) || 0);
+    cleanUpdates.min_stock = roundStock(Number(cleanUpdates.min_stock) || 0, cleanUpdates.unit);
   }
 
   // Ensure no blob: URL is sent
@@ -284,20 +292,21 @@ export async function deleteProduct(id: string): Promise<void> {
 export async function adjustProductStock(id: string, deltaStock: number): Promise<void> {
   const localList = getLocalProducts();
   const idx = localList.findIndex((p) => String(p.id) === String(id));
+  const productUnit = idx >= 0 ? localList[idx].unit : undefined;
   if (idx >= 0) {
-    localList[idx].stock_kg = roundStock(Math.max(0, (localList[idx].stock_kg || 0) + deltaStock));
+    localList[idx].stock_kg = roundStock(Math.max(0, (localList[idx].stock_kg || 0) + deltaStock), productUnit);
     saveLocalProducts(localList);
   }
 
   try {
     const { data: current, error: fetchErr } = await supabase
       .from('products')
-      .select('stock_kg')
+      .select('stock_kg, unit')
       .eq('id', id)
       .single();
 
     if (!fetchErr && current) {
-      const newStock = roundStock(Math.max(0, Number(current.stock_kg || 0) + deltaStock));
+      const newStock = roundStock(Math.max(0, Number(current.stock_kg || 0) + deltaStock), current.unit || productUnit);
       await supabase
         .from('products')
         .update({ stock_kg: newStock })
@@ -492,7 +501,8 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
       // 3. Deduct stock for each product
       for (const item of payload.items) {
         try {
-          const newStock = roundStock(Math.max(0, (item.product.stock_kg || 0) - item.qty));
+          const itemUnit = item.unit || item.product.unit;
+          const newStock = roundStock(Math.max(0, (item.product.stock_kg || 0) - item.qty), itemUnit);
           await supabase
             .from('products')
             .update({ stock_kg: newStock })
@@ -693,8 +703,17 @@ export async function fetchSales(): Promise<Sale[]> {
       };
     });
 
-    saveLocalSales(normalizedSales);
-    return normalizedSales;
+    // Auto sync status utang jika ada perubahan status di debts_credits
+    const cachedDebts = getLocalDebts();
+    const syncedSales = normalizedSales.map((s) => {
+      if ((s.payment_method || '').toUpperCase() !== 'UTANG') return s;
+      const info = getSaleDebtInfo(s, cachedDebts);
+      const targetStatus = info.isLunas ? 'paid' : (info.isPartial ? 'partial' : 'unpaid');
+      return s.status !== targetStatus ? { ...s, status: targetStatus } : s;
+    });
+
+    saveLocalSales(syncedSales);
+    return syncedSales;
   } catch (err) {
     console.warn('fetchSales exception, fallback to local cache:', err);
     return localCached;
@@ -829,12 +848,12 @@ export async function deleteSaleItem(
       try {
         const { data: prodData } = await supabase
           .from('products')
-          .select('stock_kg')
+          .select('stock_kg, unit')
           .eq('id', productId)
           .single();
 
         if (prodData) {
-          const newStock = roundStock((prodData.stock_kg || 0) + actualQty);
+          const newStock = roundStock((prodData.stock_kg || 0) + actualQty, prodData.unit);
           await supabase
             .from('products')
             .update({ stock_kg: newStock })
@@ -848,7 +867,7 @@ export async function deleteSaleItem(
       const localProds = getLocalProducts();
       const updatedProds = localProds.map(p => {
         if (p.id === productId) {
-          return { ...p, stock_kg: roundStock((p.stock_kg || 0) + actualQty) };
+          return { ...p, stock_kg: roundStock((p.stock_kg || 0) + actualQty, p.unit) };
         }
         return p;
       });
@@ -1351,13 +1370,13 @@ export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PR
           try {
             const { data: prodData } = await supabase
               .from('products')
-              .select('id, stock_kg, name')
+              .select('id, stock_kg, name, unit')
               .eq('id', prodId)
               .single();
 
             if (prodData) {
               const currentStock = Number(prodData.stock_kg) || 0;
-              const newStock = roundStock(Math.max(0, currentStock - qty));
+              const newStock = roundStock(Math.max(0, currentStock - qty), prodData.unit);
               await supabase
                 .from('products')
                 .update({ stock_kg: newStock })
@@ -1415,6 +1434,169 @@ export async function createOrder(order: Omit<Order, 'id' | 'created_at'>): Prom
 }
 
 // ==================== DEBTS & CREDITS ====================
+
+export interface UtangSyncInfo {
+  isUtang: boolean;
+  isLunas: boolean;
+  isPartial: boolean;
+  isUnpaid: boolean;
+  remainingAmount: number;
+  totalAmount: number;
+  matchingDebt?: DebtCredit | null;
+  statusBadge: {
+    label: string;
+    bg: string;
+    badgeText: string;
+  };
+}
+
+/**
+ * Helper terpusat untuk mendeteksi status utang/piutang transaksi kasir secara akurat dan real-time.
+ * Menghubungkan record penjualan (sales) dengan catatan di buku utang (debts_credits).
+ */
+export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo {
+  const isUtang = (sale.payment_method || '').toUpperCase() === 'UTANG';
+  if (!isUtang) {
+    return {
+      isUtang: false,
+      isLunas: true,
+      isPartial: false,
+      isUnpaid: false,
+      remainingAmount: 0,
+      totalAmount: Number(sale.total_amount || 0),
+      matchingDebt: null,
+      statusBadge: {
+        label: 'Lunas',
+        bg: 'bg-emerald-50 text-[#1B5E20] border-emerald-200',
+        badgeText: 'LUNAS',
+      },
+    };
+  }
+
+  const allDebts = debts && debts.length > 0 ? debts : getLocalDebts();
+  const saleTag = sale.id ? sale.id.slice(0, 8).toLowerCase() : '';
+
+  const matchingDebt = allDebts.find((d) => {
+    if (!d) return false;
+    const notes = (d.notes || '').toLowerCase();
+    if (saleTag && notes.includes(saleTag)) return true;
+    if (sale.id && notes.includes(sale.id.toLowerCase())) return true;
+    if (sale.notes && d.id && sale.notes.toLowerCase().includes(d.id.toLowerCase())) return true;
+
+    // Pencocokan nama pelanggan jika tercatat sama & nominal sama
+    const custName = (sale.customer_name || (sale.notes ? sale.notes.replace(/^Pelanggan:\s*/i, '') : '')).trim().toLowerCase();
+    if (
+      custName &&
+      d.customer_or_supplier_name &&
+      d.type === 'PIUTANG' &&
+      d.customer_or_supplier_name.trim().toLowerCase() === custName &&
+      Math.abs(Number(d.total_amount) - Number(sale.total_amount)) < 1
+    ) {
+      return true;
+    }
+    return false;
+  });
+
+  const saleStatus = (sale.status || '').toLowerCase();
+  const debtStatus = matchingDebt?.status ? matchingDebt.status.toLowerCase() : '';
+  const remaining = matchingDebt !== undefined && matchingDebt !== null
+    ? Number(matchingDebt.remaining_amount)
+    : (saleStatus === 'paid' ? 0 : Number(sale.total_amount || 0));
+
+  const isLunas = saleStatus === 'paid' || debtStatus === 'paid' || (matchingDebt !== undefined && matchingDebt !== null && remaining <= 0);
+  const isPartial = !isLunas && (saleStatus === 'partial' || debtStatus === 'partial' || (remaining > 0 && remaining < Number(sale.total_amount || 0)));
+  const isUnpaid = !isLunas && !isPartial;
+
+  let badgeLabel = 'Utang (Belum Lunas)';
+  let badgeBg = 'bg-amber-50 text-amber-800 border-amber-300';
+  let badgeText = 'BELUM LUNAS';
+
+  if (isLunas) {
+    badgeLabel = 'Utang (Lunas)';
+    badgeBg = 'bg-emerald-50 text-[#1B5E20] border-emerald-300';
+    badgeText = 'LUNAS';
+  } else if (isPartial) {
+    badgeLabel = 'Utang (Dicicil)';
+    badgeBg = 'bg-blue-50 text-blue-800 border-blue-200';
+    badgeText = 'DICICIL';
+  }
+
+  return {
+    isUtang: true,
+    isLunas,
+    isPartial,
+    isUnpaid,
+    remainingAmount: isLunas ? 0 : Math.max(0, remaining),
+    totalAmount: Number(sale.total_amount || 0),
+    matchingDebt: matchingDebt || null,
+    statusBadge: {
+      label: badgeLabel,
+      bg: badgeBg,
+      badgeText,
+    },
+  };
+}
+
+/**
+ * Sinkronisasi otomatis dua arah antara data transaksi penjualan (sales)
+ * dan buku piutang pelanggan (debts_credits).
+ * Jika piutang di buku utang lunas, status penjualan disinkronkan menjadi 'paid' (Lunas)
+ * baik di Supabase maupun LocalStorage.
+ */
+export async function syncSalesWithDebts(
+  inputSales?: Sale[],
+  inputDebts?: DebtCredit[]
+): Promise<{ sales: Sale[]; updatedCount: number }> {
+  const allSales = inputSales || getLocalSales();
+  let allDebts = inputDebts || getLocalDebts();
+
+  if (!inputDebts || inputDebts.length === 0) {
+    try {
+      const { data } = await supabase.from('debts_credits').select('*');
+      if (data && data.length > 0) {
+        allDebts = data;
+        saveLocalDebts(data);
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  let updatedCount = 0;
+  const updatedSales = allSales.map((sale) => {
+    if ((sale.payment_method || '').toUpperCase() !== 'UTANG') {
+      return sale;
+    }
+
+    const info = getSaleDebtInfo(sale, allDebts);
+    const targetStatus = info.isLunas ? 'paid' : (info.isPartial ? 'partial' : 'unpaid');
+
+    if (sale.status !== targetStatus) {
+      updatedCount++;
+      // Sync update to Supabase
+      supabase
+        .from('sales')
+        .update({ status: targetStatus })
+        .eq('id', sale.id)
+        .then(({ error }) => {
+          if (error) console.warn('Supabase sync status sale failed:', error);
+        });
+
+      return {
+        ...sale,
+        status: targetStatus,
+      };
+    }
+
+    return sale;
+  });
+
+  if (updatedCount > 0) {
+    saveLocalSales(updatedSales);
+  }
+
+  return { sales: updatedSales, updatedCount };
+}
 
 export async function fetchDebtsCredits(): Promise<DebtCredit[]> {
   try {
@@ -1487,6 +1669,8 @@ export async function payDebtCredit(id: string, paymentAmount: number): Promise<
     saveLocalDebts(updatedLocal);
   }
 
+  let finalDebt: DebtCredit | null = currentLocal ? { ...currentLocal, remaining_amount: newRemaining, status: newStatus as any } : null;
+
   try {
     // 1. Fetch current remaining amount from DB
     const { data: current, error: fetchErr } = await supabase
@@ -1510,16 +1694,74 @@ export async function payDebtCredit(id: string, paymentAmount: number): Promise<
         .single();
 
       if (!error && data) {
+        finalDebt = data;
         const synced = getLocalDebts().map((d) => (d.id === id ? data : d));
         saveLocalDebts(synced);
-        return data;
       }
     }
   } catch (err) {
     console.warn('payDebtCredit Supabase update note, recorded in local storage:', err);
   }
 
-  return currentLocal ? { ...currentLocal, remaining_amount: newRemaining, status: newStatus as any } : ({} as DebtCredit);
+  // 2. AUTO SINKRONKAN STATUS KE TRANSAKSI PENJUALAN KASIR (SALES & STRUK)
+  try {
+    const debtObj = finalDebt || currentLocal;
+    if (debtObj) {
+      const debtNotes = (debtObj.notes || '').toLowerCase();
+      const match = debtNotes.match(/transaksi kasir\s*([a-f0-9-]+)/i);
+      const saleTag = match ? match[1].toLowerCase() : null;
+      const targetSaleStatus = (finalDebt?.status === 'paid' || newRemaining <= 0) ? 'paid' : 'partial';
+
+      const localSales = getLocalSales();
+      let hasLocalUpdate = false;
+      const updatedSales = localSales.map((s) => {
+        let isMatch = false;
+        if (saleTag && s.id.toLowerCase().startsWith(saleTag)) isMatch = true;
+        if (debtNotes.includes(s.id.toLowerCase())) isMatch = true;
+        const custName = (s.customer_name || (s.notes ? s.notes.replace(/^Pelanggan:\s*/i, '') : '')).trim().toLowerCase();
+        if (
+          s.payment_method === 'UTANG' &&
+          custName &&
+          debtObj.customer_or_supplier_name &&
+          debtObj.customer_or_supplier_name.trim().toLowerCase() === custName &&
+          Math.abs(Number(s.total_amount) - Number(debtObj.total_amount)) < 1
+        ) {
+          isMatch = true;
+        }
+
+        if (isMatch && s.status !== targetSaleStatus) {
+          hasLocalUpdate = true;
+          return { ...s, status: targetSaleStatus };
+        }
+        return s;
+      });
+
+      if (hasLocalUpdate) {
+        saveLocalSales(updatedSales);
+      }
+
+      // Update in Supabase sales
+      if (saleTag) {
+        const { data: matchedSales } = await supabase
+          .from('sales')
+          .select('id, payment_method, status')
+          .ilike('id', `${saleTag}%`);
+
+        if (matchedSales && matchedSales.length > 0) {
+          for (const ms of matchedSales) {
+            await supabase
+              .from('sales')
+              .update({ status: targetSaleStatus })
+              .eq('id', ms.id);
+          }
+        }
+      }
+    }
+  } catch (syncErr) {
+    console.warn('payDebtCredit auto-sync sale status warning:', syncErr);
+  }
+
+  return finalDebt || currentLocal ? { ...currentLocal, remaining_amount: newRemaining, status: newStatus as any } : ({} as DebtCredit);
 }
 
 export async function deleteDebtCredit(id: string): Promise<void> {
