@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Printer, X, CheckCircle2, Settings, Store, Edit3, MessageCircle, Send, Phone } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Printer, X, CheckCircle2, Settings, Store, Edit3, MessageCircle, Send, Phone, Clock, AlertCircle } from 'lucide-react';
 import { 
   formatRupiah, 
   formatDateTime, 
@@ -10,8 +10,8 @@ import {
   extractPhoneNumber,
   generateWhatsAppReceiptText
 } from '../lib/utils';
-import { Product, StoreProfile } from '../types';
-import { DEFAULT_STORE_PROFILE, fetchStoreProfile } from '../services/api';
+import { Product, StoreProfile, DebtCredit } from '../types';
+import { DEFAULT_STORE_PROFILE, fetchStoreProfile, getSaleDebtInfo } from '../services/api';
 import { EditStoreProfileModal } from './EditStoreProfileModal';
 
 interface ReceiptItem {
@@ -43,6 +43,8 @@ interface ReceiptModalProps {
   customerName?: string;
   customerPhone?: string;
   date?: string;
+  status?: string;
+  debts?: DebtCredit[];
   storeProfile?: StoreProfile;
   onUpdateStoreProfile?: (profile: StoreProfile) => void;
 }
@@ -59,6 +61,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   customerName,
   customerPhone,
   date,
+  status,
+  debts = [],
   storeProfile: initialStoreProfile,
   onUpdateStoreProfile,
 }) => {
@@ -70,6 +74,24 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const safeSaleId = String(saleId || `BON-${Date.now().toString().slice(-6)}`);
   const safeItems = Array.isArray(items) ? items : [];
   const safeTotal = Number(totalAmount || 0);
+
+  // Deteksi status utang dari debts_credits
+  const effectiveDebtInfo = useMemo(() => {
+    if (!isUtang) return null;
+    return getSaleDebtInfo({
+      id: saleId || '',
+      total_amount: safeTotal,
+      payment_method: paymentMethod,
+      created_at: date || '',
+      status: status || '',
+      customer_name: customerName,
+      customer_phone: customerPhone,
+    }, debts);
+  }, [isUtang, saleId, safeTotal, paymentMethod, date, status, customerName, customerPhone, debts]);
+
+  const isUtangPaid = Boolean(status === 'paid' || effectiveDebtInfo?.isLunas);
+  const isUtangPartial = Boolean(!isUtangPaid && (status === 'partial' || effectiveDebtInfo?.isPartial));
+  const remainingDebtAmount = effectiveDebtInfo?.remainingAmount ?? (isUtangPaid ? 0 : safeTotal);
 
   // WhatsApp Send Modal State
   const [isWaModalOpen, setIsWaModalOpen] = useState(false);
@@ -143,6 +165,9 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
       paymentMethod,
       customerName: effectiveCustomerName,
       date,
+      status: isUtangPaid ? 'paid' : (isUtangPartial ? 'partial' : 'unpaid'),
+      isDebtPaid: isUtangPaid,
+      remainingDebt: remainingDebtAmount,
     });
 
     const url = `https://api.whatsapp.com/send?phone=${sanitized}&text=${encodeURIComponent(receiptText)}`;
@@ -167,7 +192,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 </h3>
                 {isUtang && (
                   <span className="text-[10px] text-emerald-100/90 font-medium">
-                    Tercatat di Buku Utang Pelanggan
+                    {isUtangPaid ? 'Piutang Telah Lunas (Buku Utang)' : 'Tercatat di Buku Utang Pelanggan'}
                   </span>
                 )}
               </div>
@@ -193,13 +218,33 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
           {/* Success Notification Banner for Utang / Bon */}
           {isUtang && (
-            <div className="no-print bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between text-xs text-amber-900 font-medium animate-in fade-in">
+            <div className={`no-print border-b px-4 py-2 flex items-center justify-between text-xs font-medium animate-in fade-in ${
+              isUtangPaid
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : isUtangPartial
+                ? 'bg-blue-50 border-blue-200 text-blue-900'
+                : 'bg-amber-50 border-amber-200 text-amber-900'
+            }`}>
               <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                <span>Transaksi Utang Berhasil Disimpan</span>
+                <span className={`w-2 h-2 rounded-full ${
+                  isUtangPaid ? 'bg-emerald-500' : isUtangPartial ? 'bg-blue-500' : 'bg-amber-500 animate-pulse'
+                }`} />
+                <span>
+                  {isUtangPaid
+                    ? 'Transaksi Utang Telah Lunas'
+                    : isUtangPartial
+                    ? `Transaksi Utang Telah Dicicil Sebagian (Sisa: ${formatRupiah(remainingDebtAmount)})`
+                    : 'Transaksi Utang Tercatat di Buku Utang'}
+                </span>
               </div>
-              <span className="text-[10px] font-bold bg-amber-200/80 px-2 py-0.5 rounded text-amber-900">
-                BELUM LUNAS
+              <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                isUtangPaid
+                  ? 'bg-emerald-200 text-emerald-900'
+                  : isUtangPartial
+                  ? 'bg-blue-200 text-blue-900'
+                  : 'bg-amber-200/80 text-amber-900'
+              }`}>
+                {isUtangPaid ? 'LUNAS' : isUtangPartial ? 'DICICIL' : 'BELUM LUNAS'}
               </span>
             </div>
           )}
@@ -305,7 +350,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 const formattedQty = isWeightUnit
                   ? Number(itemQty).toLocaleString('id-ID', {
                       minimumFractionDigits: Number.isInteger(itemQty) ? 0 : 1,
-                      maximumFractionDigits: 3,
+                      maximumFractionDigits: 2,
                     })
                   : itemQty;
 
@@ -346,8 +391,18 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 </>
               )}
               {isUtang && (
-                <div className="mt-1 p-1.5 bg-amber-50 rounded border border-amber-300 text-amber-900 text-center font-bold text-xs">
-                  STATUS: UTANG / BON (Belum Lunas)
+                <div className={`mt-1.5 p-1.5 rounded border text-center font-bold text-xs ${
+                  isUtangPaid
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                    : isUtangPartial
+                    ? 'bg-blue-50 border-blue-300 text-blue-900'
+                    : 'bg-amber-50 border-amber-300 text-amber-900'
+                }`}>
+                  {isUtangPaid
+                    ? 'STATUS: UTANG / BON (LUNAS - Rp 0)'
+                    : isUtangPartial
+                    ? `STATUS: UTANG / BON (DICICIL - Sisa ${formatRupiah(remainingDebtAmount)})`
+                    : 'STATUS: UTANG / BON (Belum Lunas)'}
                 </div>
               )}
             </div>
@@ -515,14 +570,17 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   <div className="mt-2 p-2.5 bg-gray-50 border border-gray-200 rounded-xl text-[11px] font-mono text-gray-800 max-h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed select-all">
                     {generateWhatsAppReceiptText({
                       storeProfile: profile,
-                      saleId,
-                      items,
-                      totalAmount,
+                      saleId: safeSaleId,
+                      items: safeItems,
+                      totalAmount: safeTotal,
                       cashReceived,
                       changeAmount,
                       paymentMethod,
-                      customerName,
+                      customerName: effectiveCustomerName,
                       date,
+                      status: isUtangPaid ? 'paid' : (isUtangPartial ? 'partial' : 'unpaid'),
+                      isDebtPaid: isUtangPaid,
+                      remainingDebt: remainingDebtAmount,
                     })}
                   </div>
                 )}
