@@ -247,8 +247,8 @@ export const StokView: React.FC<StokViewProps> = ({
       category: p.category,
       cost_price: p.cost_price || 0,
       selling_price: p.selling_price || 0,
-      stock_kg: roundStock(p.stock_kg || 0),
-      min_stock: roundStock(p.min_stock || 10),
+      stock_kg: roundStock(p.stock_kg || 0, p.unit),
+      min_stock: roundStock(p.min_stock || 10, p.unit),
       unit: p.unit || 'kg',
       barcode: p.barcode || '',
       is_active: p.is_active ?? true,
@@ -301,8 +301,8 @@ export const StokView: React.FC<StokViewProps> = ({
           category: formData.category,
           cost_price: Number(formData.cost_price),
           selling_price: Number(formData.selling_price),
-          stock_kg: Number(formData.stock_kg),
-          min_stock: Number(formData.min_stock),
+          stock_kg: roundStock(Number(formData.stock_kg), formData.unit),
+          min_stock: roundStock(Number(formData.min_stock), formData.unit),
           unit: formData.unit,
           barcode: formData.barcode.trim() || null,
           is_active: formData.is_active,
@@ -314,8 +314,8 @@ export const StokView: React.FC<StokViewProps> = ({
           category: formData.category,
           cost_price: Number(formData.cost_price),
           selling_price: Number(formData.selling_price),
-          stock_kg: Number(formData.stock_kg),
-          min_stock: Number(formData.min_stock),
+          stock_kg: roundStock(Number(formData.stock_kg), formData.unit),
+          min_stock: roundStock(Number(formData.min_stock), formData.unit),
           unit: formData.unit,
           barcode: formData.barcode.trim() || null,
           is_active: formData.is_active,
@@ -376,7 +376,7 @@ export const StokView: React.FC<StokViewProps> = ({
     e.preventDefault();
     if (!isRestockModalOpen) return;
 
-    const qty = roundStock(Number(restockQty));
+    const qty = roundStock(Number(restockQty), isRestockModalOpen.unit);
     if (isNaN(qty) || qty <= 0) {
       alert('Jumlah tambahan stok harus lebih dari 0');
       return;
@@ -443,7 +443,7 @@ export const StokView: React.FC<StokViewProps> = ({
     e.preventDefault();
     if (!isReduceStockModalOpen) return;
 
-    const qty = roundStock(Number(reduceQty));
+    const qty = roundStock(Number(reduceQty), isReduceStockModalOpen.unit);
     if (isNaN(qty) || qty <= 0) {
       alert('Jumlah pengurangan stok harus lebih dari 0');
       return;
@@ -491,7 +491,7 @@ export const StokView: React.FC<StokViewProps> = ({
   // Quick stock adjustment submit (legacy fallback)
   const handleStockAdjustmentSubmit = async () => {
     if (!isStockAdjustModalOpen) return;
-    const delta = roundStock(Number(stockDelta));
+    const delta = roundStock(Number(stockDelta), isStockAdjustModalOpen.unit);
     if (isNaN(delta) || delta === 0) return;
 
     try {
