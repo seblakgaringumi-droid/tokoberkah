@@ -112,6 +112,17 @@ export const StokView: React.FC<StokViewProps> = ({
     image_url: null,
   });
 
+  // Funding source for Add New Product
+  const [addFundingSource, setAddFundingSource] = useState<'KAS_TOKO' | 'TAMBAHAN_MODAL' | 'NON_BIAYA'>('KAS_TOKO');
+  const [addSupplierNotes, setAddSupplierNotes] = useState('');
+
+  // Auto calculate total initial stock cost for Add New Product
+  const addTotalCost = useMemo(() => {
+    const qty = Number(formData.stock_kg) || 0;
+    const cost = Number(formData.cost_price) || 0;
+    return Math.round(qty * cost);
+  }, [formData.stock_kg, formData.cost_price]);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSeeding, setIsSeeding] = useState(false);
@@ -222,6 +233,8 @@ export const StokView: React.FC<StokViewProps> = ({
       is_active: true,
       image_url: null,
     });
+    setAddFundingSource('KAS_TOKO');
+    setAddSupplierNotes('');
     setErrorMessage(null);
     setIsAddModalOpen(true);
   };
@@ -309,6 +322,40 @@ export const StokView: React.FC<StokViewProps> = ({
           image_url: formData.image_url || null,
           variants_json: [],
         });
+
+        // Catat Pengeluaran Kas Sesuai Sumber Biaya Pembelian Stok Awal
+        const initialQty = Number(formData.stock_kg) || 0;
+        const initialCostPerUnit = Number(formData.cost_price) || 0;
+        const totalInitialCost = Math.round(initialQty * initialCostPerUnit);
+
+        if (initialQty > 0 && totalInitialCost > 0) {
+          if (addFundingSource === 'KAS_TOKO') {
+            // Memotong Kas Toko (Tunai + QRIS / Laci harian)
+            const title = `Belanja Stok: ${formData.name.trim()} (${initialQty} ${formData.unit || 'pcs'})${addSupplierNotes.trim() ? ` - ${addSupplierNotes.trim()}` : ''}`;
+            const newExp = await createExpense({
+              title,
+              amount: totalInitialCost,
+              category: 'Belanja Stok',
+              source: 'LACI',
+            });
+            if (onExpenseCreated) {
+              onExpenseCreated(newExp);
+            }
+          } else if (addFundingSource === 'TAMBAHAN_MODAL') {
+            // Menggunakan Tambahan Modal / Kas Besar (Kas Pemilik / Luar Toko)
+            const title = `Belanja Stok (Tambahan Modal): ${formData.name.trim()} (${initialQty} ${formData.unit || 'pcs'})${addSupplierNotes.trim() ? ` - ${addSupplierNotes.trim()}` : ''}`;
+            const newExp = await createExpense({
+              title,
+              amount: totalInitialCost,
+              category: 'Belanja Stok',
+              source: 'KAS_BESAR',
+            });
+            if (onExpenseCreated) {
+              onExpenseCreated(newExp);
+            }
+          }
+          // Jika 'NON_BIAYA', tidak dicatat ke arus kas
+        }
       }
 
       playBeep('success');
@@ -1583,6 +1630,155 @@ export const StokView: React.FC<StokViewProps> = ({
                   />
                 </div>
               </div>
+
+              {/* Total Biaya Stok Awal & Pilihan Sumber Biaya (Hanya saat Tambah Produk Baru) */}
+              {!editingProduct && (
+                <div className="space-y-3 pt-2 border-t border-gray-100">
+                  {/* Kalkulasi Otomatis Total Biaya Pembelian Stok Awal */}
+                  <div className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200/80 space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-gray-700 font-medium">Total Biaya Pembelian Stok Awal:</span>
+                      <span className="font-bold text-[#1B5E20] font-mono text-sm">
+                        {formatRupiah(addTotalCost)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-gray-500">
+                      <span>Perhitungan: (HPP {formatRupiah(formData.cost_price || 0)}) x ({formData.stock_kg || 0} {formData.unit})</span>
+                      {Number(formData.stock_kg || 0) <= 0 && (
+                        <span className="text-amber-600 font-semibold">Stok awal 0 (tanpa biaya)</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Opsi Sumber Biaya Pembelian Stok */}
+                  {Number(formData.stock_kg || 0) > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-gray-900 font-bold">
+                          Sumber Biaya Pembelian Stok <span className="text-rose-500">*</span>
+                        </label>
+                        {kasTokoBalance !== undefined && (
+                          <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                            Kas Toko: {formatRupiah(kasTokoBalance)}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {/* Opsi 1: Total Kas Toko (Tunai + QRIS) */}
+                        <label 
+                          onClick={() => setAddFundingSource('KAS_TOKO')}
+                          className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 ${
+                            addFundingSource === 'KAS_TOKO'
+                              ? 'border-[#2E7D32] bg-emerald-50/70 shadow-xs'
+                              : 'border-gray-200 bg-white hover:border-gray-300'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="addFundingSource"
+                            checked={addFundingSource === 'KAS_TOKO'}
+                            onChange={() => setAddFundingSource('KAS_TOKO')}
+                            className="mt-1 w-4 h-4 text-[#2E7D32] focus:ring-emerald-500 cursor-pointer"
+                          />
+                          <div className="space-y-0.5 flex-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-gray-900 text-xs sm:text-sm flex items-center gap-1.5">
+                                <Wallet className="w-4 h-4 text-[#2E7D32]" />
+                                Total Kas Toko (Tunai + QRIS)
+                              </span>
+                              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-100 text-[#1B5E20]">
+                                Memotong Kas Toko
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-gray-600 leading-relaxed">
+                              Biaya belanja sebesar <strong className="text-emerald-900">{formatRupiah(addTotalCost)}</strong> akan otomatis dicatat sebagai <em>Belanja Stok Laci</em> dan memotong saldo Kas Toko harian.
+                            </p>
+                          </div>
+                        </label>
+
+                        {/* Opsi 2: Tambahan Modal / Kas Besar (Kas Pemilik) */}
+                        <label 
+                          onClick={() => setAddFundingSource('TAMBAHAN_MODAL')}
+                          className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 ${
+                            addFundingSource === 'TAMBAHAN_MODAL'
+                              ? 'border-blue-600 bg-blue-50/70 shadow-xs'
+                              : 'border-gray-200 bg-white hover:border-gray-300'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="addFundingSource"
+                            checked={addFundingSource === 'TAMBAHAN_MODAL'}
+                            onChange={() => setAddFundingSource('TAMBAHAN_MODAL')}
+                            className="mt-1 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <div className="space-y-0.5 flex-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-gray-900 text-xs sm:text-sm flex items-center gap-1.5">
+                                <Building2 className="w-4 h-4 text-blue-600" />
+                                Tambahan Modal / Kas Besar (Kas Pemilik)
+                              </span>
+                              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-blue-100 text-blue-800">
+                                Kas Luar Toko
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-gray-600 leading-relaxed">
+                              Menggunakan dana tambahan modal pemilik toko (Kas Besar). <strong>TIDAK memotong</strong> saldo Kas Toko laci harian.
+                            </p>
+                          </div>
+                        </label>
+
+                        {/* Opsi 3: Tanpa Biaya / Koreksi Stok Opname */}
+                        <label 
+                          onClick={() => setAddFundingSource('NON_BIAYA')}
+                          className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 ${
+                            addFundingSource === 'NON_BIAYA'
+                              ? 'border-purple-600 bg-purple-50/70 shadow-xs'
+                              : 'border-gray-200 bg-white hover:border-gray-300'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="addFundingSource"
+                            checked={addFundingSource === 'NON_BIAYA'}
+                            onChange={() => setAddFundingSource('NON_BIAYA')}
+                            className="mt-1 w-4 h-4 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                          />
+                          <div className="space-y-0.5 flex-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-gray-900 text-xs sm:text-sm flex items-center gap-1.5">
+                                <Package className="w-4 h-4 text-purple-600" />
+                                Tanpa Biaya / Koreksi Stok Opname
+                              </span>
+                              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-purple-100 text-purple-800">
+                                Non-Kas
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-gray-600 leading-relaxed">
+                              Hanya menambah jumlah stok fisik barang tanpa mencatat arus kas pengeluaran apapun.
+                            </p>
+                          </div>
+                        </label>
+                      </div>
+
+                      {/* Catatan / Nama Supplier */}
+                      <div className="pt-1">
+                        <label className="block text-gray-700 font-semibold mb-1">
+                          Catatan / Nama Supplier (Opsional)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Contoh: Grosir Pasar Induk, Agen ABC, dll."
+                          value={addSupplierNotes}
+                          onChange={(e) => setAddSupplierNotes(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-gray-300 text-xs sm:text-sm focus:border-[#2E7D32] outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="block text-gray-700 font-semibold mb-1">
