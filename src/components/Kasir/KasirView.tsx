@@ -189,7 +189,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
     setCart((prev) => {
       const existing = prev.find((item) => item.product.id === product.id);
       if (existing) {
-        const newQty = Math.max(0.001, roundStock(existing.qty + deltaQty));
+        const newQty = Math.max(0.01, roundStock(existing.qty + deltaQty, product.unit));
         const newSubtotal =
           customSubtotal !== undefined && customSubtotal !== null
             ? customSubtotal
@@ -199,14 +199,14 @@ export const KasirView: React.FC<KasirViewProps> = ({
             ? {
                 ...item,
                 qty: newQty,
-                custom_gram: roundStock(newQty * 1000),
+                custom_gram: roundStock(newQty * 1000, 'gram'),
                 subtotal: newSubtotal,
                 custom_subtotal: customSubtotal !== undefined ? customSubtotal : null,
               }
             : item
         );
       } else {
-        const initialQty = deltaQty > 0 ? roundStock(deltaQty) : 1;
+        const initialQty = deltaQty > 0 ? roundStock(deltaQty, product.unit) : 1;
         const initialSubtotal =
           customSubtotal !== undefined && customSubtotal !== null
             ? customSubtotal
@@ -217,7 +217,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
             product,
             qty: initialQty,
             unit: product.unit || 'kg',
-            custom_gram: roundStock(initialQty * 1000),
+            custom_gram: roundStock(initialQty * 1000, 'gram'),
             subtotal: initialSubtotal,
             custom_subtotal: customSubtotal !== undefined ? customSubtotal : null,
           },
@@ -235,7 +235,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
     setCart((prev) =>
       prev.map((item) => {
         if (item.product.id === productId) {
-          const qty = roundStock(newQty);
+          const qty = roundStock(newQty, item.unit || item.product.unit);
           const subtotal =
             preserveCustomSubtotal && item.custom_subtotal !== null && item.custom_subtotal !== undefined
               ? item.custom_subtotal
@@ -243,7 +243,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
           return {
             ...item,
             qty,
-            custom_gram: roundStock(qty * 1000),
+            custom_gram: roundStock(qty * 1000, 'gram'),
             subtotal,
             custom_subtotal: preserveCustomSubtotal ? item.custom_subtotal : null,
           };
@@ -2030,11 +2030,46 @@ export const KasirView: React.FC<KasirViewProps> = ({
                 </div>
               )}
 
-              {/* QRIS / TRANSFER Notice */}
-              {(paymentMethod === 'QRIS' || paymentMethod === 'TRANSFER') && (
-                <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-center space-y-2">
-                  <p className="text-xs text-blue-900 font-medium">
-                    Pastikan pembayaran senilai <strong className="text-[#1B5E20]">{formatRupiah(totalAmount)}</strong> telah berhasil masuk ke rekening / QRIS Toko Berkah.
+              {/* QRIS / TRANSFER Notice & Image Display */}
+              {paymentMethod === 'QRIS' && (
+                <div className="p-4 bg-blue-50/70 border-2 border-blue-200 rounded-2xl text-center space-y-3">
+                  <div className="flex items-center justify-center gap-1.5 text-blue-900 font-bold text-xs">
+                    <QrCode className="w-4 h-4 text-blue-700" />
+                    <span>Scan QRIS Toko Berkah</span>
+                  </div>
+
+                  <p className="text-xs text-gray-600">
+                    Scan kode QRIS ini dengan aplikasi m-Banking atau e-Wallet pelanggan:
+                  </p>
+
+                  <div className="inline-block p-2.5 bg-white border border-gray-200 rounded-xl shadow-xs">
+                    <img 
+                      src="https://kquxfvcbgogjpthhsseg.supabase.co/storage/v1/object/public/assets/qris.jpeg" 
+                      alt="QRIS Toko Berkah" 
+                      className="mx-auto w-48 h-48 sm:w-56 sm:h-56 object-contain rounded-lg border border-gray-100"
+                      referrerPolicy="no-referrer"
+                    />
+                    <p className="text-[11px] font-bold text-gray-800 mt-1.5">Merchant: TOKO BERKAH</p>
+                    <p className="text-[10px] text-gray-400">Total Tagihan: {formatRupiah(totalAmount)}</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-700 font-semibold text-left mb-1">Nama Pelanggan (Opsional):</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: Ibu Rina"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-gray-300 text-xs focus:border-[#2E7D32] outline-none bg-white"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {paymentMethod === 'TRANSFER' && (
+                <div className="p-4 bg-purple-50/70 border border-purple-200 rounded-xl text-center space-y-2">
+                  <p className="text-xs text-purple-900 font-medium">
+                    Pastikan transfer senilai <strong className="text-purple-950">{formatRupiah(totalAmount)}</strong> telah berhasil masuk ke rekening Toko Berkah.
                   </p>
                   <div>
                     <label className="block text-xs text-gray-600 text-left mb-1">Nama Pelanggan (Opsional):</label>
@@ -2162,7 +2197,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                 </div>
                 <div className="flex items-center justify-between text-[11px] mt-1 text-gray-500">
                   <span>Pecahan: {getWeightAlias(parseFloat(customQtyInput) || 0, quickQtyModalProduct.unit || 'kg') || '-'}</span>
-                  <span>Presisi 3 desimal</span>
+                  <span>Maksimal 2 desimal</span>
                 </div>
               </div>
 
@@ -2195,7 +2230,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
               {/* Subtotal Calculation Box */}
               {(() => {
                 const parsedQty = parseFloat(customQtyInput) || 0;
-                const subtotal = Math.round(roundStock(parsedQty) * quickQtyModalProduct.selling_price);
+                const subtotal = Math.round(roundStock(parsedQty, quickQtyModalProduct.unit) * quickQtyModalProduct.selling_price);
                 return (
                   <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl flex justify-between items-center">
                     <div>
