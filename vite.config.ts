@@ -12,15 +12,13 @@ export default defineConfig(() => {
     base: '/',
     plugins: [react(), tailwindcss()],
     resolve: {
-      dedupe: ['react', 'react-dom'],
+      dedupe: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
       alias: {
-        '@': path.resolve(__dirname, '.'),
-        react: path.resolve(__dirname, 'node_modules/react'),
-        'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+        '@': path.resolve(__dirname, './src'),
       },
     },
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react-dom/client'],
+      include: ['react', 'react-dom', 'react-dom/client', 'lucide-react'],
     },
     server: {
       port: 3000,
