@@ -419,15 +419,23 @@ export default function App() {
                   <UtangView
                     debts={debts}
                     onRefresh={async () => {
-                      const [d, dp] = await Promise.all([
+                      const [d, dp, s] = await Promise.all([
                         fetchDebtsCredits(),
                         fetchDebtPayments(),
+                        fetchSales(),
                       ]);
                       setDebts(d);
                       setDebtPayments(dp);
+                      setSales(s);
                     }}
-                    onPaymentRecorded={(newPayment) => {
+                    onPaymentRecorded={async (newPayment) => {
                       setDebtPayments((prev) => [newPayment, ...prev]);
+                      const [d, s] = await Promise.all([
+                        fetchDebtsCredits(),
+                        fetchSales(),
+                      ]);
+                      setDebts(d);
+                      setSales(s);
                     }}
                   />
                 )}
@@ -437,6 +445,7 @@ export default function App() {
                     sales={sales}
                     expenses={expenses}
                     wallet={wallet}
+                    debts={debts}
                     debtPayments={debtPayments}
                     onRefresh={async () => {
                       await loadAllData(false);
@@ -454,6 +463,15 @@ export default function App() {
                     onUpdateStoreProfile={setStoreProfile}
                     onSaleUpdated={(updatedSale) => {
                       setSales((prev) => prev.map((s) => (s.id === updatedSale.id ? updatedSale : s)));
+                    }}
+                    onDebtPaid={async (newPayment) => {
+                      setDebtPayments((prev) => [newPayment, ...prev]);
+                      const [d, s] = await Promise.all([
+                        fetchDebtsCredits(),
+                        fetchSales(),
+                      ]);
+                      setDebts(d);
+                      setSales(s);
                     }}
                   />
                 )}
