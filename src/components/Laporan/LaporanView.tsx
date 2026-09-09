@@ -36,10 +36,10 @@ import {
   Clock,
   RefreshCw
 } from 'lucide-react';
-import { Sale, Expense, StoreWallet, StoreProfile, DebtPayment } from '../../types';
+import { Sale, Expense, StoreWallet, StoreProfile, DebtPayment, DebtCredit } from '../../types';
 import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
 import { useFinance } from '../../context/FinanceContext';
-import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments } from '../../services/api';
+import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
 import { SinkingFundCard } from './SinkingFundCard';
@@ -64,6 +64,7 @@ interface LaporanViewProps {
   expenses: Expense[];
   wallet: StoreWallet | null;
   onRefresh: () => Promise<void>;
+  debts?: DebtCredit[];
   debtPayments?: DebtPayment[];
   storeProfile?: StoreProfile;
   onUpdateStoreProfile?: (profile: StoreProfile) => void;
@@ -71,6 +72,7 @@ interface LaporanViewProps {
   onExpenseDeleted?: (id: string) => void;
   onWalletUpdated?: (wallet: StoreWallet) => void;
   onSaleUpdated?: (updatedSale: Sale) => void;
+  onDebtPaid?: (payment: any) => void;
 }
 
 export const LaporanView: React.FC<LaporanViewProps> = ({
@@ -78,6 +80,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   expenses,
   wallet,
   onRefresh,
+  debts = [],
   debtPayments,
   storeProfile,
   onUpdateStoreProfile,
@@ -85,6 +88,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   onExpenseDeleted,
   onWalletUpdated,
   onSaleUpdated,
+  onDebtPaid,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'ringkasan' | 'penjualan' | 'pengeluaran' | 'dompet'>('ringkasan');
   const [dateFilter, setDateFilter] = useState<DateFilterType>('hari_ini');
@@ -1134,17 +1138,43 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
 
                           {/* Metode */}
                           <td className="px-4 py-3 whitespace-nowrap">
-                            <span className={`text-xs font-bold px-2 py-0.5 rounded-md border ${
-                              sale.payment_method === 'CASH' || sale.payment_method === 'TUNAI'
-                                ? 'bg-emerald-50 text-[#1B5E20] border-emerald-200'
-                                : sale.payment_method === 'QRIS'
-                                ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                : sale.payment_method === 'UTANG'
-                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : 'bg-gray-100 text-gray-700 border-gray-200'
-                            }`}>
-                              {sale.payment_method}
-                            </span>
+                            {sale.payment_method === 'UTANG' ? (
+                              (() => {
+                                const debtInfo = getSaleDebtInfo(sale, debts);
+                                if (debtInfo.isLunas) {
+                                  return (
+                                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-[#1B5E20] border-emerald-300 flex items-center gap-1 w-fit">
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                      <span>Utang (Lunas)</span>
+                                    </span>
+                                  );
+                                }
+                                if (debtInfo.isPartial) {
+                                  return (
+                                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md border bg-blue-50 text-blue-700 border-blue-300 flex items-center gap-1 w-fit">
+                                      <Clock className="w-3 h-3 text-blue-500" />
+                                      <span>Utang (Dicicil)</span>
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-md border bg-amber-50 text-amber-800 border-amber-300 flex items-center gap-1 w-fit">
+                                    <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                    <span>Utang (Belum Lunas)</span>
+                                  </span>
+                                );
+                              })()
+                            ) : (
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded-md border ${
+                                sale.payment_method === 'CASH' || sale.payment_method === 'TUNAI'
+                                  ? 'bg-emerald-50 text-[#1B5E20] border-emerald-200'
+                                  : sale.payment_method === 'QRIS'
+                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                  : 'bg-gray-100 text-gray-700 border-gray-200'
+                              }`}>
+                                {sale.payment_method}
+                              </span>
+                            )}
                           </td>
 
                           {/* RINCIAN ITEM (Summary List & Badges) */}
@@ -1888,6 +1918,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         isOpen={!!selectedSaleForDetail}
         onClose={() => setSelectedSaleForDetail(null)}
         sale={selectedSaleForDetail}
+        debts={debts}
         onPrintReceipt={(sale) => {
           setSelectedSaleForReceipt(sale);
         }}
@@ -1895,6 +1926,12 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
           setSelectedSaleForDetail(updatedSale);
           if (onSaleUpdated) {
             onSaleUpdated(updatedSale);
+          }
+          onRefresh().catch(console.warn);
+        }}
+        onDebtPaid={(payment) => {
+          if (onDebtPaid) {
+            onDebtPaid(payment);
           }
           onRefresh().catch(console.warn);
         }}
@@ -1906,6 +1943,8 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
           isOpen={!!selectedSaleForReceipt}
           onClose={() => setSelectedSaleForReceipt(null)}
           saleId={selectedSaleForReceipt.id}
+          status={selectedSaleForReceipt.status}
+          debts={debts}
           items={(selectedSaleForReceipt.items || []).map((it) => {
             const rawQty = it.qty_kg ?? it.qty ?? it.original_qty ?? 1;
             const parsedQty = Number(rawQty) || 1;
