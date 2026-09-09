@@ -50,22 +50,44 @@ export function formatStock(val: number | string | null | undefined, unit?: stri
     return unit ? `0 ${unit}` : '0';
   }
 
-  // Round to max 3 decimal places to eliminate floating point artifacts (e.g. 56.14799999999999 -> 56.148, 10.62000000000001 -> 10.62, 1.198999999999994 -> 1.199)
-  const rounded = Math.round((num + Number.EPSILON) * 1000) / 1000;
+  const u = (unit || '').toLowerCase().trim();
+  const isDiscrete = ['pcs', 'bungkus', 'botol', 'pouch', 'sachet', 'dus', 'karton', 'butir', 'kaleng', 'renteng', 'cup', 'buah', 'pack', 'pak', 'biji', 'lembar', 'porsi', 'ikat'].includes(u);
+  const isGram = ['gram', 'gr', 'g'].includes(u);
+
+  if (isDiscrete || isGram) {
+    const rounded = Math.round(num);
+    return unit ? `${rounded} ${unit}` : `${rounded}`;
+  }
+
+  // Standar pembulatan kuantitas stok barang (kg, liter, dll):
+  // Dibulatkan maksimal 2 desimal (misal 16.668 -> 16.67, 21.889 -> 21.89, 0.25 -> 0.25, 0.5 -> 0.5, 10 -> 10)
+  // Menghilangkan pecahan 3 desimal yang tidak wajar akibat pembagian nominal
+  const rounded = Math.round((num + Number.EPSILON) * 100) / 100;
   
-  // Format as clean number without trailing zeroes (e.g. 8, 10.62, 2.041, 56.148)
-  const cleanStr = parseFloat(rounded.toFixed(3)).toString();
+  // Format bersih tanpa trailing zeroes yang tidak perlu
+  const cleanStr = parseFloat(rounded.toFixed(2)).toString();
   
   return unit ? `${cleanStr} ${unit}` : cleanStr;
 }
 
-export function roundStock(val: number): number {
-  return Math.round((val + Number.EPSILON) * 1000) / 1000;
+export function roundStock(val: number, unit?: string): number {
+  if (isNaN(val)) return 0;
+  const u = (unit || '').toLowerCase().trim();
+  const isDiscrete = ['pcs', 'bungkus', 'botol', 'pouch', 'sachet', 'dus', 'karton', 'butir', 'kaleng', 'renteng', 'cup', 'buah', 'pack', 'pak', 'biji', 'lembar', 'porsi', 'ikat'].includes(u);
+  const isGram = ['gram', 'gr', 'g'].includes(u);
+
+  if (isDiscrete || isGram) {
+    return Math.round(val);
+  }
+
+  // Standar pembulatan kuantitas/stok barang timbangan (kg, liter, ons):
+  // Dibulatkan ke maksimal 2 desimal (misal 16.67, 21.89, 0.25, 0.5)
+  return Math.round((val + Number.EPSILON) * 100) / 100;
 }
 
 export function getWeightAlias(qty: number, unit?: string): string | null {
   const u = (unit || '').toLowerCase().trim();
-  const num = roundStock(qty);
+  const num = roundStock(qty, unit);
 
   if (u === 'kg' || u === 'kilogram' || u === '') {
     if (num === 0.25) return 'Saparapat';
@@ -540,6 +562,9 @@ export interface WhatsAppReceiptParams {
   paymentMethod: string;
   customerName?: string | null;
   date?: string | null;
+  status?: string | null;
+  isDebtPaid?: boolean;
+  remainingDebt?: number;
 }
 
 /**
@@ -556,7 +581,13 @@ export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): stri
     paymentMethod,
     customerName,
     date,
+    status,
+    isDebtPaid,
+    remainingDebt,
   } = params;
+
+  const isPaidDebt = Boolean(isDebtPaid || status === 'paid');
+  const isPartialDebt = Boolean(!isPaidDebt && (status === 'partial' || (remainingDebt !== undefined && remainingDebt > 0 && remainingDebt < totalAmount)));
 
   const storeName = (storeProfile?.store_name || 'TOKO BERKAH').toUpperCase();
   const tagline = storeProfile?.tagline || 'Sembako, Bumbu, & Kebutuhan Harian';
@@ -582,7 +613,11 @@ export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): stri
     if (m === 'CASH' || m === 'TUNAI') return 'Tunai / Cash';
     if (m === 'QRIS') return 'QRIS';
     if (m === 'TRANSFER') return 'Transfer Bank';
-    if (m === 'UTANG') return 'Utang / Bon (Belum Lunas)';
+    if (m === 'UTANG') {
+      if (isPaidDebt) return 'Utang / Bon (Lunas)';
+      if (isPartialDebt) return 'Utang / Bon (Dicicil)';
+      return 'Utang / Bon (Belum Lunas)';
+    }
     return paymentMethod || 'Tunai';
   })();
 
@@ -630,7 +665,7 @@ export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): stri
     const formattedQty = isWeightUnit
       ? Number(itemQty).toLocaleString('id-ID', {
           minimumFractionDigits: Number.isInteger(itemQty) ? 0 : 1,
-          maximumFractionDigits: 3,
+          maximumFractionDigits: 2,
         })
       : itemQty;
     const alias = getWeightAlias(itemQty, unitStr);
@@ -649,7 +684,13 @@ export function generateWhatsAppReceiptText(params: WhatsAppReceiptParams): stri
     lines.push(`Kembalian      : ${formatRupiah(changeAmount || 0)}`);
   }
   if (paymentMethod === 'UTANG') {
-    lines.push(`Status         : *BELUM LUNAS (UTANG / BON)*`);
+    if (isPaidDebt) {
+      lines.push(`Status         : *LUNAS (Utang / Bon Telah Dibayar)*`);
+    } else if (isPartialDebt) {
+      lines.push(`Status         : *DICICIL (Sisa Tagihan: ${formatRupiah(remainingDebt || 0)})*`);
+    } else {
+      lines.push(`Status         : *BELUM LUNAS (UTANG / BON)*`);
+    }
   }
   lines.push(divider);
 
