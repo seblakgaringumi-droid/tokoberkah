@@ -19,7 +19,8 @@ import {
   Scale,
   Edit3,
   RotateCcw,
-  CheckCheck
+  CheckCheck,
+  Layers
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Product, CartItem, Sale, SaleItem, StoreProfile } from '../../types';
@@ -2200,6 +2201,51 @@ export const KasirView: React.FC<KasirViewProps> = ({
                   <span>Maksimal 2 desimal</span>
                 </div>
               </div>
+
+              {/* Custom Product Variants if configured */}
+              {(() => {
+                const variants = Array.isArray(quickQtyModalProduct.variants_json) ? quickQtyModalProduct.variants_json : [];
+                if (variants.length === 0) return null;
+                const isKgUnit = (quickQtyModalProduct.unit || 'kg').toLowerCase().includes('kg');
+
+                return (
+                  <div className="p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-200">
+                    <span className="text-[11px] font-bold text-[#1B5E20] flex items-center gap-1.5 mb-2">
+                      <Layers className="w-3.5 h-3.5 text-[#2E7D32]" />
+                      Varian Khusus Terdaftar:
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      {variants.map((v: any, idx: number) => {
+                        const targetQty = v.qty 
+                          ? (isKgUnit && v.qty >= 10 ? roundStock(v.qty / 1000, 'kg') : roundStock(v.qty, quickQtyModalProduct.unit))
+                          : 1;
+                        const isSelected = roundStock(parseFloat(customQtyInput) || 0) === targetQty;
+
+                        return (
+                          <button
+                            key={v.id || idx}
+                            type="button"
+                            onClick={() => setCustomQtyInput(String(targetQty))}
+                            className={`p-2 text-left rounded-xl border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-[#2E7D32] text-white border-[#2E7D32] shadow-xs'
+                                : 'bg-white hover:bg-emerald-50/80 text-gray-800 border-emerald-200 hover:border-emerald-300'
+                            }`}
+                          >
+                            <div className="text-xs font-bold truncate">{v.name}</div>
+                            <div className="flex items-center justify-between text-[10px] mt-0.5 opacity-90">
+                              <span>{v.qty ? `${v.qty}g` : '1 pcs'}</span>
+                              <span className="font-mono font-bold">
+                                {v.selling_price ? formatRupiah(v.selling_price) : ''}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Quick Preset Buttons */}
               <div>
