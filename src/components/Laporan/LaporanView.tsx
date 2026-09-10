@@ -1920,28 +1920,30 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
       />
 
       {/* Detail Struk Modal */}
-      <DetailStrukModal
-        isOpen={!!selectedSaleForDetail}
-        onClose={() => setSelectedSaleForDetail(null)}
-        sale={selectedSaleForDetail}
-        debts={debts}
-        onPrintReceipt={(sale) => {
-          setSelectedSaleForReceipt(sale);
-        }}
-        onSaleUpdated={(updatedSale) => {
-          setSelectedSaleForDetail(updatedSale);
-          if (onSaleUpdated) {
-            onSaleUpdated(updatedSale);
-          }
-          onRefresh().catch(console.warn);
-        }}
-        onDebtPaid={(payment) => {
-          if (onDebtPaid) {
-            onDebtPaid(payment);
-          }
-          onRefresh().catch(console.warn);
-        }}
-      />
+      {selectedSaleForDetail && (
+        <DetailStrukModal
+          isOpen={!!selectedSaleForDetail}
+          onClose={() => setSelectedSaleForDetail(null)}
+          sale={selectedSaleForDetail}
+          debts={debts}
+          onPrintReceipt={(sale) => {
+            setSelectedSaleForReceipt(sale);
+          }}
+          onSaleUpdated={(updatedSale) => {
+            setSelectedSaleForDetail(updatedSale);
+            if (onSaleUpdated) {
+              onSaleUpdated(updatedSale);
+            }
+            onRefresh().catch(console.warn);
+          }}
+          onDebtPaid={(payment) => {
+            if (onDebtPaid) {
+              onDebtPaid(payment);
+            }
+            onRefresh().catch(console.warn);
+          }}
+        />
+      )}
 
       {/* Struk Reprint Modal */}
       {selectedSaleForReceipt && (
