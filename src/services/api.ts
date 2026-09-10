@@ -96,6 +96,14 @@ export async function fetchProducts(): Promise<Product[]> {
     }
 
     // Clean floating point artifacts and resolve permanent database image
+    const existingLocal = getLocalProducts();
+    const localVariantMap: Record<string, any> = {};
+    existingLocal.forEach((lp) => {
+      if (lp.variants_json && (Array.isArray(lp.variants_json) ? lp.variants_json.length > 0 : true)) {
+        localVariantMap[lp.id] = lp.variants_json;
+      }
+    });
+
     const processed: Product[] = (data || []).map((p: any) => {
       // Prioritize database image_url or image column
       const dbImg = p.image_url || p.image || null;
@@ -106,6 +114,9 @@ export async function fetchProducts(): Promise<Product[]> {
 
       const roundedStock = typeof p.stock_kg === 'number' ? roundStock(p.stock_kg, p.unit) : p.stock_kg;
       const roundedMinStock = typeof p.min_stock === 'number' ? roundStock(p.min_stock, p.unit) : p.min_stock;
+      const variants = (p.variants_json !== undefined && p.variants_json !== null)
+        ? p.variants_json
+        : (localVariantMap[p.id] || []);
 
       // Auto-reconcile / repair stock with excessive decimals directly in database
       if (typeof p.stock_kg === 'number' && p.stock_kg !== roundedStock) {
@@ -117,6 +128,7 @@ export async function fetchProducts(): Promise<Product[]> {
         image_url: chosenImg,
         stock_kg: roundedStock,
         min_stock: roundedMinStock,
+        variants_json: variants,
       };
     });
 
@@ -171,6 +183,19 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
 
     if (error) {
       console.warn('Supabase insert note, checking column fallback:', error.message);
+      if (error.message && (error.message.includes('variants_json') || error.message.includes('column'))) {
+        const withoutVariants = { ...cleanPayload };
+        delete (withoutVariants as any).variants_json;
+        const { data: retryData2, error: retryError2 } = await supabase
+          .from('products')
+          .insert([withoutVariants])
+          .select()
+          .single();
+        if (!retryError2 && retryData2) {
+          const finalImg = retryData2.image_url || retryData2.image || cleanImageUrl;
+          return { ...retryData2, image_url: finalImg, variants_json: cleanPayload.variants_json };
+        }
+      }
       if (cleanImageUrl) {
         // Retry with 'image' column in case database table used 'image' instead of 'image_url'
         const withAlternativeColumn = { ...cleanPayload, image: cleanImageUrl } as any;
@@ -238,6 +263,20 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
 
     if (error) {
       console.warn('Supabase update note, checking image column fallback:', error.message);
+      if (error.message && (error.message.includes('variants_json') || error.message.includes('column'))) {
+        const withoutVariants = { ...cleanUpdates };
+        delete (withoutVariants as any).variants_json;
+        const { data: retryData2, error: retryError2 } = await supabase
+          .from('products')
+          .update(withoutVariants)
+          .eq('id', id)
+          .select()
+          .single();
+        if (!retryError2 && retryData2) {
+          const finalImg = retryData2.image_url || retryData2.image || cleanUpdates.image_url || null;
+          return { ...retryData2, image_url: finalImg, variants_json: cleanUpdates.variants_json };
+        }
+      }
       if ('image_url' in cleanUpdates) {
         const withAlternativeColumn = { ...cleanUpdates, image: cleanUpdates.image_url } as any;
         delete withAlternativeColumn.image_url;
