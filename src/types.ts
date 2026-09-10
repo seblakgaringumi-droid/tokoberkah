@@ -1,3 +1,13 @@
+export interface ProductVariant {
+  id: string;
+  name: string;
+  qty?: number | null; // Variant Qty in Grams (or units)
+  unit?: string;
+  selling_price: number;
+  cost_price?: number;
+  barcode?: string | null;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -9,7 +19,7 @@ export interface Product {
   is_active: boolean;
   image_url: string | null;
   unit: string;
-  variants_json?: any;
+  variants_json?: ProductVariant[] | any;
   barcode: string | null;
 }
 
