@@ -40,6 +40,23 @@ export function formatDateTime(dateString?: string | null): string {
   }
 }
 
+export const DISCRETE_UNITS = [
+  'pcs', 'buah', 'bungkus', 'botol', 'pouch', 'sachet', 'dus', 'karton',
+  'butir', 'kaleng', 'renteng', 'cup', 'pack', 'pak', 'biji', 'lembar',
+  'porsi', 'ikat', 'pasang', 'rol', 'strip', 'tablet', 'kaplet'
+];
+
+export function isDiscreteUnit(unit?: string | null): boolean {
+  if (!unit) return false;
+  const u = unit.toLowerCase().trim();
+  return DISCRETE_UNITS.includes(u);
+}
+
+export function isWeightUnit(unit?: string | null): boolean {
+  const u = (unit || 'kg').toLowerCase().trim();
+  return ['kg', 'kilogram', 'gram', 'gr', 'g', 'ons', 'liter', 'ltr', 'l'].includes(u);
+}
+
 // Audio beep for barcode scan / checkout success using Web Audio API
 export function formatStock(val: number | string | null | undefined, unit?: string): string {
   if (val === null || val === undefined || val === '') {
@@ -51,7 +68,7 @@ export function formatStock(val: number | string | null | undefined, unit?: stri
   }
 
   const u = (unit || '').toLowerCase().trim();
-  const isDiscrete = ['pcs', 'bungkus', 'botol', 'pouch', 'sachet', 'dus', 'karton', 'butir', 'kaleng', 'renteng', 'cup', 'buah', 'pack', 'pak', 'biji', 'lembar', 'porsi', 'ikat'].includes(u);
+  const isDiscrete = isDiscreteUnit(u);
   const isGram = ['gram', 'gr', 'g'].includes(u);
 
   if (isDiscrete || isGram) {
@@ -73,7 +90,7 @@ export function formatStock(val: number | string | null | undefined, unit?: stri
 export function roundStock(val: number, unit?: string): number {
   if (isNaN(val)) return 0;
   const u = (unit || '').toLowerCase().trim();
-  const isDiscrete = ['pcs', 'bungkus', 'botol', 'pouch', 'sachet', 'dus', 'karton', 'butir', 'kaleng', 'renteng', 'cup', 'buah', 'pack', 'pak', 'biji', 'lembar', 'porsi', 'ikat'].includes(u);
+  const isDiscrete = isDiscreteUnit(u);
   const isGram = ['gram', 'gr', 'g'].includes(u);
 
   if (isDiscrete || isGram) {
@@ -86,6 +103,7 @@ export function roundStock(val: number, unit?: string): number {
 }
 
 export function getWeightAlias(qty: number, unit?: string): string | null {
+  if (isDiscreteUnit(unit)) return null;
   const u = (unit || '').toLowerCase().trim();
   const num = roundStock(qty, unit);
 
@@ -106,10 +124,6 @@ export function getWeightAlias(qty: number, unit?: string): string | null {
     if (num === 500) return 'Setengah (500g)';
     if (num === 750) return '3/4 (750g)';
     if (num === 100) return '1 Ons (100g)';
-  } else {
-    if (num === 0.25) return '1/4';
-    if (num === 0.5) return 'Setengah';
-    if (num === 0.75) return '3/4';
   }
   return null;
 }
