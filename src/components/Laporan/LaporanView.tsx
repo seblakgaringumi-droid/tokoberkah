@@ -1051,6 +1051,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               <thead className="bg-gray-50/70 text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
                 <tr>
                   <th className="px-4 py-3 w-10"></th>
+                  <th className="px-3 py-3 text-center w-14">Nomor</th>
                   <th className="px-4 py-3">ID Nota</th>
                   <th className="px-4 py-3">Waktu</th>
                   <th className="px-4 py-3">Metode</th>
@@ -1063,12 +1064,12 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               <tbody className="divide-y divide-gray-100">
                 {filteredSales.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-8 text-center text-gray-400 text-xs">
+                    <td colSpan={9} className="p-8 text-center text-gray-400 text-xs">
                       Belum ada riwayat penjualan pada periode ini.
                     </td>
                   </tr>
                 ) : (
-                  filteredSales.map((sale) => {
+                  filteredSales.map((sale, index) => {
                     const items = sale.items || sale.sale_items || [];
                     const isExpanded = expandedSaleIds.has(sale.id);
                     const totalQty = items.reduce((acc, it) => acc + (Number(it.qty_kg) || 1), 0);
@@ -1110,6 +1111,11 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                                 <ChevronDown className="w-4 h-4" />
                               )}
                             </button>
+                          </td>
+
+                          {/* Nomor Urut */}
+                          <td className="px-3 py-3 text-center font-mono font-semibold text-xs text-gray-500 whitespace-nowrap">
+                            {index + 1}
                           </td>
 
                           {/* ID Nota */}
@@ -1239,7 +1245,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         {/* Expandable Accordion Row for itemized breakdown */}
                         {isExpanded && (
                           <tr className="bg-emerald-50/20 border-b border-emerald-100">
-                            <td colSpan={8} className="p-3 sm:px-6">
+                            <td colSpan={9} className="p-3 sm:px-6">
                               <div className="bg-white rounded-xl p-3.5 border border-emerald-200/80 shadow-2xs space-y-2.5">
                                 <div className="flex items-center justify-between text-xs pb-2 border-b border-gray-100">
                                   <div className="flex items-center gap-2">
