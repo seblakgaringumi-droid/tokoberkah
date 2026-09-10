@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Product, CartItem, Sale, SaleItem, StoreProfile } from '../../types';
-import { formatRupiah, playBeep, formatStock, roundStock, formatStockWithAlias, getWeightAlias } from '../../lib/utils';
+import { formatRupiah, playBeep, formatStock, roundStock, formatStockWithAlias, getWeightAlias, isDiscreteUnit, isWeightUnit } from '../../lib/utils';
 import { processSale } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ErrorBoundary } from '../ErrorBoundary';
@@ -61,13 +61,14 @@ const getQuickPresets = (unit?: string) => {
       { label: '5000g (5 kg)', qty: 5000 },
     ];
   }
+  // Satuan diskrit (Pcs, Buah, Sachet, dll) - HANYA integer, tidak ada varian desimal/pecahan
   return [
     { label: '1', qty: 1 },
-    { label: '0.5 (Setengah)', qty: 0.5 },
-    { label: '0.25 (1/4)', qty: 0.25 },
     { label: '2', qty: 2 },
+    { label: '3', qty: 3 },
     { label: '5', qty: 5 },
     { label: '10', qty: 10 },
+    { label: '12 (1 Lusin)', qty: 12 },
   ];
 };
 
@@ -754,50 +755,124 @@ export const KasirView: React.FC<KasirViewProps> = ({
                       </span>
                     </div>
 
-                    {/* Quick weight variant shortcut buttons on card */}
-                    {!isOutOfStock && (
-                      <div
-                        className="mt-2 pt-1.5 border-t border-gray-100 flex items-center gap-1 flex-wrap"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => addToCart(product, 1)}
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-50 hover:bg-emerald-50 text-gray-700 hover:text-[#2E7D32] border border-gray-200 hover:border-emerald-300 transition-colors cursor-pointer"
-                          title="Tambah 1 ke keranjang"
+                    {/* Quick quantity shortcut buttons on card */}
+                    {!isOutOfStock && (() => {
+                      const isDiscrete = isDiscreteUnit(product.unit);
+                      const hasCustomVariants = Array.isArray(product.variants_json) && product.variants_json.length > 0;
+
+                      return (
+                        <div
+                          className="mt-2 pt-1.5 border-t border-gray-100 flex items-center gap-1 flex-wrap"
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          +1
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => addToCart(product, 0.5)}
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50/80 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 transition-colors cursor-pointer"
-                          title="Tambah Setengah (0.5) ke keranjang"
-                        >
-                          +0.5
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => addToCart(product, 0.25)}
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50/80 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 transition-colors cursor-pointer"
-                          title="Tambah Saparapat (0.25) ke keranjang"
-                        >
-                          +0.25
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setQuickQtyModalProduct(product);
-                            setCustomQtyInput(inCart ? String(inCart.qty) : '1');
-                          }}
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 transition-colors ml-auto flex items-center gap-0.5 cursor-pointer"
-                          title="Pilih Kuantitas / Berat Kustom"
-                        >
-                          <Scale className="w-2.5 h-2.5" />
-                          <span>Pilih</span>
-                        </button>
-                      </div>
-                    )}
+                          {isDiscrete ? (
+                            // SATUAN PCS / BUAH (DISCRETE): Tanpa varian pecahan (0.5, 0.25) dan tanpa icon timbangan
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => addToCart(product, 1)}
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded bg-gray-50 hover:bg-emerald-50 text-gray-700 hover:text-[#2E7D32] border border-gray-200 hover:border-emerald-300 transition-colors cursor-pointer"
+                                title="Tambah 1 ke keranjang"
+                              >
+                                +1
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => addToCart(product, 2)}
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded bg-gray-50 hover:bg-emerald-50 text-gray-700 hover:text-[#2E7D32] border border-gray-200 hover:border-emerald-300 transition-colors cursor-pointer"
+                                title="Tambah 2 ke keranjang"
+                              >
+                                +2
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => addToCart(product, 5)}
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded bg-gray-50 hover:bg-emerald-50 text-gray-700 hover:text-[#2E7D32] border border-gray-200 hover:border-emerald-300 transition-colors cursor-pointer"
+                                title="Tambah 5 ke keranjang"
+                              >
+                                +5
+                              </button>
+                              {hasCustomVariants ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setQuickQtyModalProduct(product);
+                                    setCustomQtyInput(inCart ? String(inCart.qty) : '1');
+                                  }}
+                                  className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] border border-emerald-300 transition-colors ml-auto flex items-center gap-1 cursor-pointer"
+                                  title="Pilih varian produk"
+                                >
+                                  <Layers className="w-2.5 h-2.5 text-[#2E7D32]" />
+                                  <span>{product.variants_json.length} Varian</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setQuickQtyModalProduct(product);
+                                    setCustomQtyInput(inCart ? String(inCart.qty) : '1');
+                                  }}
+                                  className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-200 transition-colors ml-auto flex items-center gap-0.5 cursor-pointer"
+                                  title="Input jumlah pesanan manual"
+                                >
+                                  <Edit3 className="w-2.5 h-2.5" />
+                                  <span>Qty</span>
+                                </button>
+                              )}
+                            </>
+                          ) : (
+                            // SATUAN BERAT / TIMBANGAN (KG, LITER, GRAM): Menyediakan shortcut varian pecahan
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => addToCart(product, 1)}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-50 hover:bg-emerald-50 text-gray-700 hover:text-[#2E7D32] border border-gray-200 hover:border-emerald-300 transition-colors cursor-pointer"
+                                title="Tambah 1 ke keranjang"
+                              >
+                                +1
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => addToCart(product, 0.5)}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50/80 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 transition-colors cursor-pointer"
+                                title="Tambah Setengah (0.5) ke keranjang"
+                              >
+                                +0.5
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => addToCart(product, 0.25)}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50/80 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 transition-colors cursor-pointer"
+                                title="Tambah Saparapat (0.25) ke keranjang"
+                              >
+                                +0.25
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setQuickQtyModalProduct(product);
+                                  setCustomQtyInput(inCart ? String(inCart.qty) : '1');
+                                }}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 transition-colors ml-auto flex items-center gap-0.5 cursor-pointer"
+                                title={hasCustomVariants ? "Pilih varian terdaftar" : "Pilih Kuantitas / Berat Kustom"}
+                              >
+                                {hasCustomVariants ? (
+                                  <>
+                                    <Layers className="w-2.5 h-2.5 text-amber-800" />
+                                    <span>{product.variants_json.length} Varian</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Scale className="w-2.5 h-2.5" />
+                                    <span>Pilih</span>
+                                  </>
+                                )}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -846,8 +921,10 @@ export const KasirView: React.FC<KasirViewProps> = ({
               ) : (
                 cart.map((item) => {
                   const presets = getQuickPresets(item.unit || item.product.unit);
-                  const currentAlias = getWeightAlias(item.qty, item.unit || item.product.unit);
+                  const isDiscrete = isDiscreteUnit(item.unit || item.product.unit);
+                  const currentAlias = isDiscrete ? null : getWeightAlias(item.qty, item.unit || item.product.unit);
                   const isKgUnit = (item.unit || item.product.unit || 'kg').toLowerCase().includes('kg');
+                  const isGramUnit = ['gram', 'gr', 'g'].includes((item.unit || item.product.unit || '').toLowerCase());
                   const isEditingSubtotal = editingSubtotalItemId === item.product.id;
                   const isGramOpen = activeGramItemId === item.product.id;
                   const hasCustomSubtotal = item.custom_subtotal !== null && item.custom_subtotal !== undefined;
@@ -877,7 +954,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             <span>{formatRupiah(item.product.selling_price)}</span>
                             <span>x</span>
                             <span className="text-gray-800 font-semibold">
-                              {item.qty < 1 && isKgUnit
+                              {!isDiscrete && item.qty < 1 && isKgUnit
                                 ? `${roundStock(item.qty * 1000)} gr (${item.qty} kg)`
                                 : formatStock(item.qty, item.unit || item.product.unit)}
                             </span>
@@ -912,8 +989,8 @@ export const KasirView: React.FC<KasirViewProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              const step = item.qty <= 0.25 ? 0.05 : item.qty <= 1 ? 0.25 : 1;
-                              updateItemQty(item.product.id, roundStock(item.qty - step), true);
+                              const step = isDiscrete ? 1 : (item.qty <= 0.25 ? 0.05 : item.qty <= 1 ? 0.25 : 1);
+                              updateItemQty(item.product.id, roundStock(item.qty - step, item.unit || item.product.unit), true);
                             }}
                             className="w-7 h-7 border border-gray-200 rounded-lg flex items-center justify-center text-xs font-bold text-gray-600 hover:bg-gray-100 active:scale-95 transition-all cursor-pointer"
                             title="Kurangi kuantitas"
@@ -922,25 +999,25 @@ export const KasirView: React.FC<KasirViewProps> = ({
                           </button>
                           <input
                             type="number"
-                            step="any"
-                            min="0.001"
+                            step={isDiscrete ? "1" : "any"}
+                            min={isDiscrete ? "1" : "0.001"}
                             value={item.qty}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value);
                               if (!isNaN(val)) {
-                                updateItemQty(item.product.id, val, true);
+                                updateItemQty(item.product.id, isDiscrete ? Math.round(val) : val, true);
                               } else if (e.target.value === '') {
                                 updateItemQty(item.product.id, 0, true);
                               }
                             }}
                             className="w-14 text-center text-xs font-bold py-1 px-1 border border-gray-200 rounded-lg outline-none focus:border-[#2E7D32] focus:ring-1 focus:ring-[#2E7D32] bg-gray-50 hover:bg-white transition-colors font-mono text-gray-900"
-                            title="Ketik angka desimal langsung (contoh: 0.25, 0.5, 1.25)"
+                            title={isDiscrete ? "Ketik jumlah pcs (contoh: 1, 2, 5)" : "Ketik angka desimal langsung (contoh: 0.25, 0.5, 1.25)"}
                           />
                           <button
                             type="button"
                             onClick={() => {
-                              const step = item.qty < 1 ? 0.25 : 1;
-                              updateItemQty(item.product.id, roundStock(item.qty + step), true);
+                              const step = isDiscrete ? 1 : (item.qty < 1 ? 0.25 : 1);
+                              updateItemQty(item.product.id, roundStock(item.qty + step, item.unit || item.product.unit), true);
                             }}
                             className="w-7 h-7 border border-gray-200 rounded-lg flex items-center justify-center text-xs font-bold text-gray-600 hover:bg-gray-100 active:scale-95 transition-all cursor-pointer"
                             title="Tambah kuantitas"
@@ -1102,30 +1179,32 @@ export const KasirView: React.FC<KasirViewProps> = ({
                           );
                         })}
 
-                        {/* Input Gram Toggle Button */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (activeGramItemId === item.product.id) {
-                              setActiveGramItemId(null);
-                            } else {
-                              setActiveGramItemId(item.product.id);
-                              setGramInputMap((prev) => ({
-                                ...prev,
-                                [item.product.id]: String(roundStock(item.qty * 1000)),
-                              }));
-                            }
-                          }}
-                          className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer active:scale-95 border flex items-center gap-0.5 ${
-                            isGramOpen
-                              ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
-                              : 'bg-emerald-50 hover:bg-emerald-100 text-[#2E7D32] border-emerald-300'
-                          }`}
-                          title="Input kuantitas dalam satuan Gram"
-                        >
-                          <Scale className="w-2.5 h-2.5" />
-                          <span>Input Gram</span>
-                        </button>
+                        {/* Input Gram Toggle Button (Hanya untuk produk timbangan kg/gram) */}
+                        {!isDiscrete && (isKgUnit || isGramUnit) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (activeGramItemId === item.product.id) {
+                                setActiveGramItemId(null);
+                              } else {
+                                setActiveGramItemId(item.product.id);
+                                setGramInputMap((prev) => ({
+                                  ...prev,
+                                  [item.product.id]: String(roundStock(item.qty * 1000)),
+                                }));
+                              }
+                            }}
+                            className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer active:scale-95 border flex items-center gap-0.5 ${
+                              isGramOpen
+                                ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
+                                : 'bg-emerald-50 hover:bg-emerald-100 text-[#2E7D32] border-emerald-300'
+                            }`}
+                            title="Input kuantitas dalam satuan Gram"
+                          >
+                            <Scale className="w-2.5 h-2.5" />
+                            <span>Input Gram</span>
+                          </button>
+                        )}
 
                         {/* Editable Subtotal Toggle Button */}
                         <button
@@ -1423,8 +1502,10 @@ export const KasirView: React.FC<KasirViewProps> = ({
               ) : (
                 cart.map((item) => {
                   const presets = getQuickPresets(item.unit || item.product.unit);
-                  const currentAlias = getWeightAlias(item.qty, item.unit || item.product.unit);
+                  const isDiscrete = isDiscreteUnit(item.unit || item.product.unit);
+                  const currentAlias = isDiscrete ? null : getWeightAlias(item.qty, item.unit || item.product.unit);
                   const isKgUnit = (item.unit || item.product.unit || 'kg').toLowerCase().includes('kg');
+                  const isGramUnit = ['gram', 'gr', 'g'].includes((item.unit || item.product.unit || '').toLowerCase());
                   const isEditingSubtotal = editingSubtotalItemId === item.product.id;
                   const isGramOpen = activeGramItemId === item.product.id;
                   const hasCustomSubtotal = item.custom_subtotal !== null && item.custom_subtotal !== undefined;
@@ -1453,7 +1534,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             <span>{formatRupiah(item.product.selling_price)}</span>
                             <span>x</span>
                             <span className="text-gray-800 font-semibold">
-                              {item.qty < 1 && isKgUnit
+                              {!isDiscrete && item.qty < 1 && isKgUnit
                                 ? `${roundStock(item.qty * 1000)} gr (${item.qty} kg)`
                                 : formatStock(item.qty, item.unit || item.product.unit)}
                             </span>
@@ -1497,22 +1578,22 @@ export const KasirView: React.FC<KasirViewProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              const step = item.qty <= 0.25 ? 0.05 : item.qty <= 1 ? 0.25 : 1;
-                              updateItemQty(item.product.id, roundStock(item.qty - step), true);
+                              const step = isDiscrete ? 1 : (item.qty <= 0.25 ? 0.05 : item.qty <= 1 ? 0.25 : 1);
+                              updateItemQty(item.product.id, roundStock(item.qty - step, item.unit || item.product.unit), true);
                             }}
-                            className="px-2.5 py-1.5 text-gray-700"
+                            className="px-2.5 py-1.5 text-gray-700 cursor-pointer"
                           >
                             <Minus className="w-3.5 h-3.5" />
                           </button>
                           <input
                             type="number"
-                            step="any"
-                            min="0.001"
+                            step={isDiscrete ? "1" : "any"}
+                            min={isDiscrete ? "1" : "0.001"}
                             value={item.qty}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value);
                               if (!isNaN(val)) {
-                                updateItemQty(item.product.id, val, true);
+                                updateItemQty(item.product.id, isDiscrete ? Math.round(val) : val, true);
                               } else if (e.target.value === '') {
                                 updateItemQty(item.product.id, 0, true);
                               }
@@ -1522,38 +1603,40 @@ export const KasirView: React.FC<KasirViewProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              const step = item.qty < 1 ? 0.25 : 1;
-                              updateItemQty(item.product.id, roundStock(item.qty + step), true);
+                              const step = isDiscrete ? 1 : (item.qty < 1 ? 0.25 : 1);
+                              updateItemQty(item.product.id, roundStock(item.qty + step, item.unit || item.product.unit), true);
                             }}
-                            className="px-2.5 py-1.5 text-gray-700"
+                            className="px-2.5 py-1.5 text-gray-700 cursor-pointer"
                           >
                             <Plus className="w-3.5 h-3.5" />
                           </button>
                         </div>
 
                         <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (activeGramItemId === item.product.id) {
-                                setActiveGramItemId(null);
-                              } else {
-                                setActiveGramItemId(item.product.id);
-                                setGramInputMap((prev) => ({
-                                  ...prev,
-                                  [item.product.id]: String(roundStock(item.qty * 1000)),
-                                }));
-                              }
-                            }}
-                            className={`text-[11px] px-2 py-1 rounded-lg font-semibold border flex items-center gap-0.5 ${
-                              isGramOpen
-                                ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
-                                : 'bg-emerald-50 text-[#2E7D32] border-emerald-300'
-                            }`}
-                          >
-                            <Scale className="w-3 h-3" />
-                            <span>Gram</span>
-                          </button>
+                          {!isDiscrete && (isKgUnit || isGramUnit) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (activeGramItemId === item.product.id) {
+                                  setActiveGramItemId(null);
+                                } else {
+                                  setActiveGramItemId(item.product.id);
+                                  setGramInputMap((prev) => ({
+                                    ...prev,
+                                    [item.product.id]: String(roundStock(item.qty * 1000)),
+                                  }));
+                                }
+                              }}
+                              className={`text-[11px] px-2 py-1 rounded-lg font-semibold border flex items-center gap-0.5 cursor-pointer ${
+                                isGramOpen
+                                  ? 'bg-[#2E7D32] text-white border-[#2E7D32]'
+                                  : 'bg-emerald-50 text-[#2E7D32] border-emerald-300'
+                              }`}
+                            >
+                              <Scale className="w-3 h-3" />
+                              <span>Gram</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -1633,7 +1716,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                       )}
 
                       {/* Mobile Inline Gram Input */}
-                      {isGramOpen && (
+                      {!isDiscrete && isGramOpen && (
                         <div className="mt-2 p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 space-y-1.5 animate-in fade-in duration-150">
                           <div className="flex items-center justify-between">
                             <span className="text-[11px] font-bold text-[#1B5E20] flex items-center gap-1">
@@ -2133,89 +2216,91 @@ export const KasirView: React.FC<KasirViewProps> = ({
       )}
 
       {/* Quick Custom Quantity / Scale Weight Modal */}
-      {quickQtyModalProduct && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-gray-100 animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-xl bg-emerald-50 text-[#2E7D32] flex items-center justify-center border border-emerald-100">
-                  <Scale className="w-5 h-5" />
+      {quickQtyModalProduct && (() => {
+        const isModalDiscrete = isDiscreteUnit(quickQtyModalProduct.unit);
+        const modalVariants = Array.isArray(quickQtyModalProduct.variants_json) ? quickQtyModalProduct.variants_json : [];
+        const isKgUnit = (quickQtyModalProduct.unit || 'kg').toLowerCase().includes('kg');
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-gray-100 animate-in zoom-in-95 duration-150">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 text-[#2E7D32] flex items-center justify-center border border-emerald-100">
+                    {isModalDiscrete ? <Layers className="w-5 h-5" /> : <Scale className="w-5 h-5" />}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-gray-900 text-sm">
+                      {isModalDiscrete ? 'Kuantitas & Varian Produk' : 'Tentukan Berat / Kuantitas'}
+                    </h3>
+                    <p className="text-[11px] text-gray-400">
+                      {quickQtyModalProduct.name}
+                    </p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setQuickQtyModalProduct(null)}
+                  className="p-1 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="py-4 space-y-4">
+                {/* Product Info & Unit Price */}
+                <div className="p-3 bg-gray-50 rounded-2xl border border-gray-200/70 flex justify-between items-center text-xs">
+                  <div>
+                    <span className="text-gray-500 block">Harga Satuan</span>
+                    <span className="font-bold text-gray-900 text-sm">
+                      {formatRupiah(quickQtyModalProduct.selling_price)} / {quickQtyModalProduct.unit || (isModalDiscrete ? 'pcs' : 'kg')}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-gray-500 block">Sisa Stok</span>
+                    <span className="font-semibold text-emerald-700">
+                      {formatStock(quickQtyModalProduct.stock_kg, quickQtyModalProduct.unit || (isModalDiscrete ? 'pcs' : 'kg'))}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Input Value with Unit */}
                 <div>
-                  <h3 className="font-bold text-gray-900 text-sm">
-                    Tentukan Berat / Kuantitas
-                  </h3>
-                  <p className="text-[11px] text-gray-400">
-                    {quickQtyModalProduct.name}
-                  </p>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                    {isModalDiscrete ? 'Jumlah Pembelian (Kuantitas):' : 'Input Kuantitas / Berat Desimal:'}
+                  </label>
+                  <div className="relative flex items-center">
+                    <input
+                      type="number"
+                      step={isModalDiscrete ? "1" : "any"}
+                      min={isModalDiscrete ? "1" : "0.001"}
+                      autoFocus
+                      value={customQtyInput}
+                      onChange={(e) => setCustomQtyInput(e.target.value)}
+                      className="w-full px-4 py-3 rounded-2xl border-2 border-[#2E7D32] text-xl font-bold text-gray-900 outline-none pr-16 font-mono focus:ring-4 focus:ring-[#2E7D32]/15 transition-all"
+                      placeholder={isModalDiscrete ? "Contoh: 1, 2, 5" : "Contoh: 0.25 atau 0.5"}
+                    />
+                    <span className="absolute right-4 text-sm font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-lg">
+                      {quickQtyModalProduct.unit || (isModalDiscrete ? 'pcs' : 'kg')}
+                    </span>
+                  </div>
+                  {!isModalDiscrete && (
+                    <div className="flex items-center justify-between text-[11px] mt-1 text-gray-500">
+                      <span>Pecahan: {getWeightAlias(parseFloat(customQtyInput) || 0, quickQtyModalProduct.unit || 'kg') || '-'}</span>
+                      <span>Maksimal 2 desimal</span>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setQuickQtyModalProduct(null)}
-                className="p-1 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            <div className="py-4 space-y-4">
-              {/* Product Info & Unit Price */}
-              <div className="p-3 bg-gray-50 rounded-2xl border border-gray-200/70 flex justify-between items-center text-xs">
-                <div>
-                  <span className="text-gray-500 block">Harga Satuan</span>
-                  <span className="font-bold text-gray-900 text-sm">
-                    {formatRupiah(quickQtyModalProduct.selling_price)} / {quickQtyModalProduct.unit || 'kg'}
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className="text-gray-500 block">Sisa Stok</span>
-                  <span className="font-semibold text-emerald-700">
-                    {formatStock(quickQtyModalProduct.stock_kg, quickQtyModalProduct.unit || 'kg')}
-                  </span>
-                </div>
-              </div>
-
-              {/* Input Value with Unit */}
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                  Input Kuantitas / Berat Desimal:
-                </label>
-                <div className="relative flex items-center">
-                  <input
-                    type="number"
-                    step="any"
-                    min="0.001"
-                    autoFocus
-                    value={customQtyInput}
-                    onChange={(e) => setCustomQtyInput(e.target.value)}
-                    className="w-full px-4 py-3 rounded-2xl border-2 border-[#2E7D32] text-xl font-bold text-gray-900 outline-none pr-16 font-mono focus:ring-4 focus:ring-[#2E7D32]/15 transition-all"
-                    placeholder="Contoh: 0.25 atau 0.5"
-                  />
-                  <span className="absolute right-4 text-sm font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-lg">
-                    {quickQtyModalProduct.unit || 'kg'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[11px] mt-1 text-gray-500">
-                  <span>Pecahan: {getWeightAlias(parseFloat(customQtyInput) || 0, quickQtyModalProduct.unit || 'kg') || '-'}</span>
-                  <span>Maksimal 2 desimal</span>
-                </div>
-              </div>
-
-              {/* Custom Product Variants if configured */}
-              {(() => {
-                const variants = Array.isArray(quickQtyModalProduct.variants_json) ? quickQtyModalProduct.variants_json : [];
-                if (variants.length === 0) return null;
-                const isKgUnit = (quickQtyModalProduct.unit || 'kg').toLowerCase().includes('kg');
-
-                return (
+                {/* Custom Product Variants if configured */}
+                {modalVariants.length > 0 && (
                   <div className="p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-200">
                     <span className="text-[11px] font-bold text-[#1B5E20] flex items-center gap-1.5 mb-2">
                       <Layers className="w-3.5 h-3.5 text-[#2E7D32]" />
                       Varian Khusus Terdaftar:
                     </span>
                     <div className="grid grid-cols-2 gap-2">
-                      {variants.map((v: any, idx: number) => {
+                      {modalVariants.map((v: any, idx: number) => {
                         const targetQty = v.qty 
                           ? (isKgUnit && v.qty >= 10 ? roundStock(v.qty / 1000, 'kg') : roundStock(v.qty, quickQtyModalProduct.unit))
                           : 1;
@@ -2234,7 +2319,11 @@ export const KasirView: React.FC<KasirViewProps> = ({
                           >
                             <div className="text-xs font-bold truncate">{v.name}</div>
                             <div className="flex items-center justify-between text-[10px] mt-0.5 opacity-90">
-                              <span>{v.qty ? `${v.qty}g` : '1 pcs'}</span>
+                              <span>
+                                {v.qty 
+                                  ? (isKgUnit ? `${v.qty}g` : `${v.qty} ${quickQtyModalProduct.unit || 'pcs'}`) 
+                                  : (v.unit || '1 pcs')}
+                              </span>
                               <span className="font-mono font-bold">
                                 {v.selling_price ? formatRupiah(v.selling_price) : ''}
                               </span>
@@ -2244,89 +2333,91 @@ export const KasirView: React.FC<KasirViewProps> = ({
                       })}
                     </div>
                   </div>
-                );
-              })()}
+                )}
 
-              {/* Quick Preset Buttons */}
-              <div>
-                <span className="text-[11px] font-semibold text-gray-500 block mb-1.5">
-                  Pilihan Cepat Varian Berat:
-                </span>
-                <div className="grid grid-cols-3 gap-2">
-                  {getQuickPresets(quickQtyModalProduct.unit).map((preset) => {
-                    const isSelected = roundStock(parseFloat(customQtyInput) || 0) === roundStock(preset.qty);
-                    return (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        onClick={() => setCustomQtyInput(String(preset.qty))}
-                        className={`py-2 px-2 text-xs font-semibold rounded-xl border transition-all cursor-pointer text-center ${
-                          isSelected
-                            ? 'bg-[#2E7D32] text-white border-[#2E7D32] shadow-xs'
-                            : 'bg-gray-50 hover:bg-emerald-50 text-gray-700 border-gray-200 hover:border-emerald-300'
-                        }`}
-                      >
-                        {preset.label}
-                      </button>
-                    );
-                  })}
+                {/* Quick Preset Buttons */}
+                <div>
+                  <span className="text-[11px] font-semibold text-gray-500 block mb-1.5">
+                    {isModalDiscrete ? 'Pilihan Cepat Kuantitas:' : 'Pilihan Cepat Varian Berat:'}
+                  </span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {getQuickPresets(quickQtyModalProduct.unit).map((preset) => {
+                      const isSelected = roundStock(parseFloat(customQtyInput) || 0) === roundStock(preset.qty);
+                      return (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => setCustomQtyInput(String(preset.qty))}
+                          className={`py-2 px-2 text-xs font-semibold rounded-xl border transition-all cursor-pointer text-center ${
+                            isSelected
+                              ? 'bg-[#2E7D32] text-white border-[#2E7D32] shadow-xs'
+                              : 'bg-gray-50 hover:bg-emerald-50 text-gray-700 border-gray-200 hover:border-emerald-300'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
 
-              {/* Subtotal Calculation Box */}
-              {(() => {
-                const parsedQty = parseFloat(customQtyInput) || 0;
-                const subtotal = Math.round(roundStock(parsedQty, quickQtyModalProduct.unit) * quickQtyModalProduct.selling_price);
-                return (
-                  <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl flex justify-between items-center">
-                    <div>
-                      <span className="text-[11px] text-emerald-800 font-medium block">
-                        Kalkulasi Subtotal:
-                      </span>
-                      <span className="text-xs text-gray-600 font-mono">
-                        {formatStock(parsedQty, quickQtyModalProduct.unit || 'kg')} x {formatRupiah(quickQtyModalProduct.selling_price)}
+                {/* Subtotal Calculation Box */}
+                {(() => {
+                  const rawQty = parseFloat(customQtyInput) || 0;
+                  const parsedQty = isModalDiscrete ? Math.round(rawQty) : roundStock(rawQty, quickQtyModalProduct.unit);
+                  const subtotal = Math.round(parsedQty * quickQtyModalProduct.selling_price);
+                  return (
+                    <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl flex justify-between items-center">
+                      <div>
+                        <span className="text-[11px] text-emerald-800 font-medium block">
+                          Kalkulasi Subtotal:
+                        </span>
+                        <span className="text-xs text-gray-600 font-mono">
+                          {formatStock(parsedQty, quickQtyModalProduct.unit || (isModalDiscrete ? 'pcs' : 'kg'))} x {formatRupiah(quickQtyModalProduct.selling_price)}
+                        </span>
+                      </div>
+                      <span className="text-base font-extrabold text-[#1B5E20] font-mono">
+                        {formatRupiah(subtotal)}
                       </span>
                     </div>
-                    <span className="text-base font-extrabold text-[#1B5E20] font-mono">
-                      {formatRupiah(subtotal)}
-                    </span>
-                  </div>
-                );
-              })()}
-            </div>
+                  );
+                })()}
+              </div>
 
-            {/* Modal Actions */}
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setQuickQtyModalProduct(null)}
-                className="py-2.5 px-4 rounded-xl border border-gray-200 hover:bg-gray-100 text-gray-700 font-semibold text-xs transition-colors cursor-pointer"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const parsed = parseFloat(customQtyInput);
-                  if (!isNaN(parsed) && parsed > 0) {
-                    const inCart = cart.find((item) => item.product.id === quickQtyModalProduct.id);
-                    if (inCart) {
-                      updateItemQty(quickQtyModalProduct.id, parsed);
-                    } else {
-                      addToCart(quickQtyModalProduct, parsed);
+              {/* Modal Actions */}
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setQuickQtyModalProduct(null)}
+                  className="py-2.5 px-4 rounded-xl border border-gray-200 hover:bg-gray-100 text-gray-700 font-semibold text-xs transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parsed = parseFloat(customQtyInput);
+                    if (!isNaN(parsed) && parsed > 0) {
+                      const finalQty = isModalDiscrete ? Math.round(parsed) : parsed;
+                      const inCart = cart.find((item) => item.product.id === quickQtyModalProduct.id);
+                      if (inCart) {
+                        updateItemQty(quickQtyModalProduct.id, finalQty);
+                      } else {
+                        addToCart(quickQtyModalProduct, finalQty);
+                      }
+                      setQuickQtyModalProduct(null);
                     }
-                    setQuickQtyModalProduct(null);
-                  }
-                }}
-                className="py-2.5 px-4 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <Check className="w-4 h-4" />
-                <span>Terapkan Pesanan</span>
-              </button>
+                  }}
+                  className="py-2.5 px-4 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Terapkan Pesanan</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Clear Cart Confirmation Dialog / Modal */}
       {isClearCartConfirmOpen && (
