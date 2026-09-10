@@ -28,7 +28,7 @@ import {
   Filter
 } from 'lucide-react';
 import { Product, StoreProfile, Expense, ProductVariant } from '../../types';
-import { formatRupiah, playBeep, formatStock, roundStock } from '../../lib/utils';
+import { formatRupiah, playBeep, formatStock, roundStock, isDiscreteUnit } from '../../lib/utils';
 import { useFinance } from '../../context/FinanceContext';
 import { ProductImageUploader } from './ProductImageUploader';
 import { KatalogModal } from '../Katalog/KatalogModal';
@@ -289,10 +289,10 @@ export const StokView: React.FC<StokViewProps> = ({
     setErrorMessage(null);
   };
 
-  // Check if Variant Qty should be enabled (Gram/kg) or disabled (Pcs)
+  // Check if Variant Qty should be enabled (Gram/kg) or disabled (Pcs/Buah/Discrete)
   const isGramUnit = formData.unit?.toLowerCase() === 'gram' || formData.unit?.toLowerCase() === 'kg' || formData.unit?.toLowerCase().includes('gr');
-  const isPcsUnit = formData.unit?.toLowerCase() === 'pcs';
-  const isVariantQtyEnabled = !isPcsUnit && (isGramUnit || formData.unit?.toLowerCase() !== 'pcs');
+  const isPcsUnit = isDiscreteUnit(formData.unit) || formData.unit?.toLowerCase() === 'pcs';
+  const isVariantQtyEnabled = !isPcsUnit && (isGramUnit || !isDiscreteUnit(formData.unit));
 
   const handleAddVariant = () => {
     const defaultQty = isVariantQtyEnabled ? 250 : null;
