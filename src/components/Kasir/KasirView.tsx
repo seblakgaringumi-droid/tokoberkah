@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Product, CartItem, Sale, SaleItem, StoreProfile } from '../../types';
-import { formatRupiah, playBeep, formatStock, roundStock, formatStockWithAlias, getWeightAlias, isDiscreteUnit, isWeightUnit } from '../../lib/utils';
+import { formatRupiah, playBeep, formatStock, roundStock, formatStockWithAlias, getWeightAlias, isDiscreteUnit, isWeightUnit, findMatchingVariant, calculateSubtotalForQty } from '../../lib/utils';
 import { processSale } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ErrorBoundary } from '../ErrorBoundary';
@@ -195,7 +195,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
         const newSubtotal =
           customSubtotal !== undefined && customSubtotal !== null
             ? customSubtotal
-            : Math.round(newQty * product.selling_price);
+            : calculateSubtotalForQty(product, newQty);
         return prev.map((item) =>
           item.product.id === product.id
             ? {
@@ -212,7 +212,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
         const initialSubtotal =
           customSubtotal !== undefined && customSubtotal !== null
             ? customSubtotal
-            : Math.round(initialQty * product.selling_price);
+            : calculateSubtotalForQty(product, initialQty);
         return [
           ...prev,
           {
@@ -241,7 +241,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
           const subtotal =
             preserveCustomSubtotal && item.custom_subtotal !== null && item.custom_subtotal !== undefined
               ? item.custom_subtotal
-              : Math.round(qty * item.product.selling_price);
+              : calculateSubtotalForQty(item.product, qty);
           return {
             ...item,
             qty,
@@ -267,7 +267,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
             const subtotal =
               item.custom_subtotal !== null && item.custom_subtotal !== undefined
                 ? item.custom_subtotal
-                : Math.round(newKg * item.product.selling_price);
+                : calculateSubtotalForQty(item.product, newKg);
             return {
               ...item,
               qty: newKg,
@@ -291,7 +291,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
           const subtotal =
             item.custom_subtotal !== null && item.custom_subtotal !== undefined
               ? item.custom_subtotal
-              : Math.round(newKg * item.product.selling_price);
+              : calculateSubtotalForQty(item.product, newKg);
           return {
             ...item,
             qty: newKg,
@@ -331,12 +331,12 @@ export const KasirView: React.FC<KasirViewProps> = ({
     setEditingSubtotalItemId(null);
   };
 
-  // Reset custom subtotal back to standard formula (qty * price)
+  // Reset custom subtotal back to standard formula or custom variant
   const handleResetSubtotal = (productId: string) => {
     setCart((prev) =>
       prev.map((item) => {
         if (item.product.id === productId) {
-          const standard = Math.round(item.qty * item.product.selling_price);
+          const standard = calculateSubtotalForQty(item.product, item.qty);
           return {
             ...item,
             subtotal: standard,
@@ -927,6 +927,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                   const isGramUnit = ['gram', 'gr', 'g'].includes((item.unit || item.product.unit || '').toLowerCase());
                   const isEditingSubtotal = editingSubtotalItemId === item.product.id;
                   const isGramOpen = activeGramItemId === item.product.id;
+                  const matchingVariant = findMatchingVariant(item.product, item.qty);
                   const hasCustomSubtotal = item.custom_subtotal !== null && item.custom_subtotal !== undefined;
                   const standardSubtotal = Math.round(item.qty * item.product.selling_price);
 
@@ -942,6 +943,11 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             {currentAlias && (
                               <span className="text-[10px] font-bold px-1.5 py-0.5 bg-emerald-100 text-[#2E7D32] rounded border border-emerald-200">
                                 {currentAlias}
+                              </span>
+                            )}
+                            {matchingVariant && !hasCustomSubtotal && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 bg-emerald-100 text-[#1B5E20] rounded border border-emerald-300 flex items-center gap-0.5" title={`Harga Varian Kustom: ${matchingVariant.name}`}>
+                                <Layers className="w-2.5 h-2.5 text-[#2E7D32]" /> {matchingVariant.name}
                               </span>
                             )}
                             {hasCustomSubtotal && (
@@ -1178,6 +1184,38 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             </button>
                           );
                         })}
+
+                        {/* Registered Custom Variants (from Stok setting) */}
+                        {Array.isArray(item.product.variants_json) && item.product.variants_json.length > 0 && (
+                          <div className="flex items-center gap-1.5 mt-1.5 w-full flex-wrap">
+                            <span className="text-[10px] text-[#1B5E20] font-bold flex items-center gap-0.5">
+                              <Layers className="w-2.5 h-2.5 text-[#2E7D32]" /> Varian:
+                            </span>
+                            {item.product.variants_json.map((v: any, idx: number) => {
+                              const isKg = isKgUnit;
+                              const targetQty = v.qty 
+                                ? (isKg && v.qty >= 10 ? roundStock(v.qty / 1000, 'kg') : roundStock(v.qty, item.unit || item.product.unit))
+                                : 1;
+                              const isSelected = Math.abs(roundStock(item.qty) - targetQty) < 0.001;
+
+                              return (
+                                <button
+                                  key={v.id || idx}
+                                  type="button"
+                                  onClick={() => updateItemQty(item.product.id, targetQty)}
+                                  className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer border ${
+                                    isSelected
+                                      ? 'bg-[#2E7D32] text-white border-[#2E7D32] shadow-2xs font-bold'
+                                      : 'bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] border-emerald-300'
+                                  }`}
+                                  title={`${v.name}: ${formatRupiah(v.selling_price)}`}
+                                >
+                                  {v.name} ({formatRupiah(v.selling_price)})
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
 
                         {/* Input Gram Toggle Button (Hanya untuk produk timbangan kg/gram) */}
                         {!isDiscrete && (isKgUnit || isGramUnit) && (
@@ -1508,6 +1546,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                   const isGramUnit = ['gram', 'gr', 'g'].includes((item.unit || item.product.unit || '').toLowerCase());
                   const isEditingSubtotal = editingSubtotalItemId === item.product.id;
                   const isGramOpen = activeGramItemId === item.product.id;
+                  const matchingVariant = findMatchingVariant(item.product, item.qty);
                   const hasCustomSubtotal = item.custom_subtotal !== null && item.custom_subtotal !== undefined;
                   const standardSubtotal = Math.round(item.qty * item.product.selling_price);
 
@@ -1522,6 +1561,11 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             {currentAlias && (
                               <span className="text-[10px] font-bold px-1.5 py-0.5 bg-emerald-100 text-[#2E7D32] rounded border border-emerald-200">
                                 {currentAlias}
+                              </span>
+                            )}
+                            {matchingVariant && !hasCustomSubtotal && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 bg-emerald-100 text-[#1B5E20] rounded border border-emerald-300 flex items-center gap-0.5" title={`Harga Varian Kustom: ${matchingVariant.name}`}>
+                                <Layers className="w-2.5 h-2.5 text-[#2E7D32]" /> {matchingVariant.name}
                               </span>
                             )}
                             {hasCustomSubtotal && (
@@ -2365,15 +2409,25 @@ export const KasirView: React.FC<KasirViewProps> = ({
                 {(() => {
                   const rawQty = parseFloat(customQtyInput) || 0;
                   const parsedQty = isModalDiscrete ? Math.round(rawQty) : roundStock(rawQty, quickQtyModalProduct.unit);
-                  const subtotal = Math.round(parsedQty * quickQtyModalProduct.selling_price);
+                  const matchingVar = findMatchingVariant(quickQtyModalProduct, parsedQty);
+                  const subtotal = calculateSubtotalForQty(quickQtyModalProduct, parsedQty);
+
                   return (
                     <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl flex justify-between items-center">
                       <div>
-                        <span className="text-[11px] text-emerald-800 font-medium block">
-                          Kalkulasi Subtotal:
+                        <span className="text-[11px] text-emerald-800 font-bold block flex items-center gap-1">
+                          {matchingVar ? (
+                            <>
+                              <Layers className="w-3.5 h-3.5 text-[#2E7D32]" />
+                              Harga Varian: {matchingVar.name}
+                            </>
+                          ) : (
+                            'Kalkulasi Subtotal:'
+                          )}
                         </span>
                         <span className="text-xs text-gray-600 font-mono">
-                          {formatStock(parsedQty, quickQtyModalProduct.unit || (isModalDiscrete ? 'pcs' : 'kg'))} x {formatRupiah(quickQtyModalProduct.selling_price)}
+                          {formatStock(parsedQty, quickQtyModalProduct.unit || (isModalDiscrete ? 'pcs' : 'kg'))}
+                          {matchingVar ? ` (${formatRupiah(matchingVar.selling_price)})` : ` x ${formatRupiah(quickQtyModalProduct.selling_price)}`}
                         </span>
                       </div>
                       <span className="text-base font-extrabold text-[#1B5E20] font-mono">
@@ -2399,11 +2453,12 @@ export const KasirView: React.FC<KasirViewProps> = ({
                     const parsed = parseFloat(customQtyInput);
                     if (!isNaN(parsed) && parsed > 0) {
                       const finalQty = isModalDiscrete ? Math.round(parsed) : parsed;
+                      const calculatedSub = calculateSubtotalForQty(quickQtyModalProduct, finalQty);
                       const inCart = cart.find((item) => item.product.id === quickQtyModalProduct.id);
                       if (inCart) {
                         updateItemQty(quickQtyModalProduct.id, finalQty);
                       } else {
-                        addToCart(quickQtyModalProduct, finalQty);
+                        addToCart(quickQtyModalProduct, finalQty, calculatedSub);
                       }
                       setQuickQtyModalProduct(null);
                     }
