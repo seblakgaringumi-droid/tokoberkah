@@ -920,7 +920,6 @@ export const KasirView: React.FC<KasirViewProps> = ({
                 </div>
               ) : (
                 cart.map((item) => {
-                  const presets = getQuickPresets(item.unit || item.product.unit);
                   const isDiscrete = isDiscreteUnit(item.unit || item.product.unit);
                   const currentAlias = isDiscrete ? null : getWeightAlias(item.qty, item.unit || item.product.unit);
                   const isKgUnit = (item.unit || item.product.unit || 'kg').toLowerCase().includes('kg');
@@ -1164,30 +1163,11 @@ export const KasirView: React.FC<KasirViewProps> = ({
                         </div>
                       )}
 
-                      {/* Quick Quantity Shortcut Badges + Tool Buttons */}
+                      {/* Registered Custom Variants & Tool Buttons */}
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                        <span className="text-[10px] text-gray-400 font-medium">Pintas:</span>
-                        {presets.map((preset) => {
-                          const isSelected = roundStock(item.qty) === roundStock(preset.qty);
-                          return (
-                            <button
-                              key={preset.label}
-                              type="button"
-                              onClick={() => updateItemQty(item.product.id, preset.qty)}
-                              className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer active:scale-95 border ${
-                                isSelected
-                                  ? 'bg-[#2E7D32] text-white border-[#2E7D32] shadow-2xs font-bold ring-1 ring-[#2E7D32]/30'
-                                  : 'bg-emerald-50/70 hover:bg-emerald-100 text-emerald-900 border-emerald-200/70'
-                              }`}
-                            >
-                              {preset.label}
-                            </button>
-                          );
-                        })}
-
                         {/* Registered Custom Variants (from Stok setting) */}
                         {Array.isArray(item.product.variants_json) && item.product.variants_json.length > 0 && (
-                          <div className="flex items-center gap-1.5 mt-1.5 w-full flex-wrap">
+                          <div className="flex items-center gap-1.5 w-full flex-wrap mb-0.5">
                             <span className="text-[10px] text-[#1B5E20] font-bold flex items-center gap-0.5">
                               <Layers className="w-2.5 h-2.5 text-[#2E7D32]" /> Varian:
                             </span>
@@ -1539,7 +1519,6 @@ export const KasirView: React.FC<KasirViewProps> = ({
                 <div className="py-8 text-center text-gray-500">Keranjang masih kosong</div>
               ) : (
                 cart.map((item) => {
-                  const presets = getQuickPresets(item.unit || item.product.unit);
                   const isDiscrete = isDiscreteUnit(item.unit || item.product.unit);
                   const currentAlias = isDiscrete ? null : getWeightAlias(item.qty, item.unit || item.product.unit);
                   const isKgUnit = (item.unit || item.product.unit || 'kg').toLowerCase().includes('kg');
@@ -1815,26 +1794,37 @@ export const KasirView: React.FC<KasirViewProps> = ({
                         </div>
                       )}
 
-                      {/* Mobile Quick Presets */}
-                      <div className="flex items-center gap-1 overflow-x-auto py-1 mt-1 scrollbar-none">
-                        {presets.map((preset) => {
-                          const isSelected = roundStock(item.qty) === roundStock(preset.qty);
-                          return (
-                            <button
-                              key={preset.label}
-                              type="button"
-                              onClick={() => updateItemQty(item.product.id, preset.qty)}
-                              className={`text-[10px] px-2 py-1 rounded-md font-semibold whitespace-nowrap transition-all border ${
-                                isSelected
-                                  ? 'bg-[#2E7D32] text-white border-[#2E7D32] font-bold'
-                                  : 'bg-emerald-50/70 text-emerald-900 border-emerald-200'
-                              }`}
-                            >
-                              {preset.label}
-                            </button>
-                          );
-                        })}
-                      </div>
+                      {/* Mobile Registered Custom Variants */}
+                      {Array.isArray(item.product.variants_json) && item.product.variants_json.length > 0 && (
+                        <div className="flex items-center gap-1 overflow-x-auto py-1 mt-1 scrollbar-none">
+                          <span className="text-[10px] text-[#1B5E20] font-bold flex items-center gap-0.5 whitespace-nowrap">
+                            <Layers className="w-2.5 h-2.5 text-[#2E7D32]" /> Varian:
+                          </span>
+                          {item.product.variants_json.map((v: any, idx: number) => {
+                            const isKg = isKgUnit;
+                            const targetQty = v.qty 
+                              ? (isKg && v.qty >= 10 ? roundStock(v.qty / 1000, 'kg') : roundStock(v.qty, item.unit || item.product.unit))
+                              : 1;
+                            const isSelected = Math.abs(roundStock(item.qty) - targetQty) < 0.001;
+
+                            return (
+                              <button
+                                key={v.id || idx}
+                                type="button"
+                                onClick={() => updateItemQty(item.product.id, targetQty)}
+                                className={`text-[10px] px-2 py-1 rounded-md font-semibold whitespace-nowrap transition-all border ${
+                                  isSelected
+                                    ? 'bg-[#2E7D32] text-white border-[#2E7D32] font-bold'
+                                    : 'bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] border-emerald-300'
+                                }`}
+                                title={`${v.name}: ${formatRupiah(v.selling_price)}`}
+                              >
+                                {v.name} ({formatRupiah(v.selling_price)})
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })
