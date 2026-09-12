@@ -1,4 +1,4 @@
-import { StoreWallet, Sale, Expense, StoreProfile, DebtPayment } from '../types';
+import { StoreWallet, Sale, Expense, StoreProfile, DebtPayment, Product, ProductVariant } from '../types';
 
 export function formatRupiah(amount: number | string | null | undefined): string {
   const num = typeof amount === 'number' ? amount : Number(amount) || 0;
@@ -126,6 +126,59 @@ export function getWeightAlias(qty: number, unit?: string): string | null {
     if (num === 100) return '1 Ons (100g)';
   }
   return null;
+}
+
+export function findMatchingVariant(product?: Product | null, qty?: number | null): ProductVariant | null {
+  if (!product || qty === undefined || qty === null || isNaN(qty)) return null;
+  if (!product.variants_json || !Array.isArray(product.variants_json) || product.variants_json.length === 0) {
+    return null;
+  }
+
+  const unit = (product.unit || 'kg').toLowerCase().trim();
+  const isKg = unit === 'kg' || unit === 'kilogram';
+  const targetQtyInGram = roundStock(qty * 1000, 'gram');
+
+  for (const v of product.variants_json) {
+    if (!v || typeof v.selling_price !== 'number' || v.selling_price <= 0) continue;
+
+    const vUnit = (v.unit || '').toLowerCase().trim();
+    let vQtyInKg = 0;
+
+    if (isKg) {
+      if (vUnit === 'gram' || vUnit === 'gr' || vUnit === 'g' || (v.qty && v.qty >= 10)) {
+        vQtyInKg = (v.qty || 0) / 1000;
+      } else if (vUnit === 'kg' || vUnit === 'kilogram') {
+        vQtyInKg = v.qty || 0;
+      } else {
+        vQtyInKg = (v.qty || 0) >= 10 ? (v.qty || 0) / 1000 : (v.qty || 0);
+      }
+      if (Math.abs(vQtyInKg - qty) < 0.001 || Math.abs((v.qty || 0) - targetQtyInGram) < 0.1) {
+        return v;
+      }
+    } else {
+      // For discrete or other units (pcs, buah, etc.)
+      if (v.qty !== null && v.qty !== undefined && Math.abs(v.qty - qty) < 0.001) {
+        return v;
+      }
+    }
+  }
+
+  return null;
+}
+
+export function calculateSubtotalForQty(product?: Product | null, qty?: number | null, customSubtotal?: number | null): number {
+  if (!product || qty === undefined || qty === null || isNaN(qty)) return 0;
+
+  if (customSubtotal !== undefined && customSubtotal !== null) {
+    return customSubtotal;
+  }
+
+  const matchingVariant = findMatchingVariant(product, qty);
+  if (matchingVariant && matchingVariant.selling_price > 0) {
+    return Math.round(matchingVariant.selling_price);
+  }
+
+  return Math.round(qty * (product.selling_price || 0));
 }
 
 export function formatStockWithAlias(val: number | string | null | undefined, unit?: string): string {
