@@ -86,24 +86,26 @@ export const CalendarRangeModal: React.FC<CalendarRangeModalProps> = ({
     }
   }, [isOpen, startDate, endDate, todayStr]);
 
-  if (!isOpen) return null;
+  // Determine active visual range (pure expressions, no conditional hooks)
+  const activeEffectiveStart = isSelectingEnd && hoverDate && hoverDate < tempStart ? hoverDate : tempStart;
+  const activeEffectiveEnd = isSelectingEnd && hoverDate && hoverDate >= tempStart ? hoverDate : tempEnd;
 
   // Month navigation
   const handlePrevMonth = () => {
     if (viewMonth === 0) {
       setViewMonth(11);
-      setViewYear(viewYear - 1);
+      setViewYear((prev) => prev - 1);
     } else {
-      setViewMonth(viewMonth - 1);
+      setViewMonth((prev) => prev - 1);
     }
   };
 
   const handleNextMonth = () => {
     if (viewMonth === 11) {
       setViewMonth(0);
-      setViewYear(viewYear + 1);
+      setViewYear((prev) => prev + 1);
     } else {
-      setViewMonth(viewMonth + 1);
+      setViewMonth((prev) => prev + 1);
     }
   };
 
@@ -151,12 +153,6 @@ export const CalendarRangeModal: React.FC<CalendarRangeModalProps> = ({
     return days;
   };
 
-  const primaryMonthDays = generateMonthGrid(viewYear, viewMonth);
-  // Secondary month is next month
-  const secondaryYear = viewMonth === 11 ? viewYear + 1 : viewYear;
-  const secondaryMonth = viewMonth === 11 ? 0 : viewMonth + 1;
-  const secondaryMonthDays = generateMonthGrid(secondaryYear, secondaryMonth);
-
   // Handle clicking on a calendar day
   const handleDayClick = (dateStr: string) => {
     if (!isSelectingEnd) {
@@ -177,21 +173,6 @@ export const CalendarRangeModal: React.FC<CalendarRangeModalProps> = ({
       setHoverDate(null);
     }
   };
-
-  // Determine active visual range (taking hover into account if currently selecting second date)
-  const activeEffectiveEnd = useMemo(() => {
-    if (isSelectingEnd && hoverDate) {
-      return hoverDate >= tempStart ? hoverDate : tempStart;
-    }
-    return tempEnd;
-  }, [isSelectingEnd, hoverDate, tempStart, tempEnd]);
-
-  const activeEffectiveStart = useMemo(() => {
-    if (isSelectingEnd && hoverDate && hoverDate < tempStart) {
-      return hoverDate;
-    }
-    return tempStart;
-  }, [isSelectingEnd, hoverDate, tempStart]);
 
   // Preset Handlers
   const applyPreset = (start: string, end: string) => {
@@ -297,6 +278,15 @@ export const CalendarRangeModal: React.FC<CalendarRangeModalProps> = ({
   };
 
   const totalDays = countDays(tempStart, tempEnd);
+
+  // If modal is not open, return null here (all hooks have already executed in identical order)
+  if (!isOpen) return null;
+
+  const primaryMonthDays = generateMonthGrid(viewYear, viewMonth);
+  // Secondary month is next month
+  const secondaryYear = viewMonth === 11 ? viewYear + 1 : viewYear;
+  const secondaryMonth = viewMonth === 11 ? 0 : viewMonth + 1;
+  const secondaryMonthDays = generateMonthGrid(secondaryYear, secondaryMonth);
 
   // Render individual month calendar view
   const renderMonth = (year: number, month: number, days: typeof primaryMonthDays, isPrimary: boolean) => {
