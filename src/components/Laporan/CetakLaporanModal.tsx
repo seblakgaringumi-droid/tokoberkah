@@ -2,6 +2,7 @@ import React from 'react';
 import { Printer, X, Download, Store, Calendar, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import { formatRupiah, formatDateTime, formatDate } from '../../lib/utils';
 import { Sale, Expense, StoreWallet, StoreProfile } from '../../types';
+import { getBankInstallmentCycle } from './CadanganAkumulasiCard';
 
 interface CetakLaporanModalProps {
   isOpen: boolean;
@@ -61,6 +62,11 @@ export const CetakLaporanModal: React.FC<CetakLaporanModalProps> = ({
   const now = new Date();
   const diffTime = now.getTime() - START_DATE.getTime();
   const totalDays = Math.max(1, Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1);
+
+  const totalAccumulatedRent = totalDays * dailyRentTarget;
+  const bankCycle = getBankInstallmentCycle(now);
+  const totalAccumulatedBank = bankCycle.currentDayInCycle * dailyBankTarget;
+  const totalIdealReserve = totalAccumulatedRent + totalAccumulatedBank;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto">
@@ -203,14 +209,22 @@ export const CetakLaporanModal: React.FC<CetakLaporanModalProps> = ({
           </div>
 
           {/* 4. Target Cadangan Akumulasi Toko */}
-          <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200 text-amber-950 flex justify-between items-center">
-            <div>
-              <span className="font-bold block">Ideal Saldo Cadangan (All-Time {totalDays} Hari):</span>
-              <span className="text-[10px] text-amber-800">Sejak mulai operasional: 19 Agustus 2026</span>
+          <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200 text-amber-950 space-y-1.5">
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="font-bold block text-xs">Ideal Saldo Cadangan Akumulasi Saat Ini:</span>
+                <span className="text-[10px] text-amber-800">
+                  Sewa Toko ({totalDays} hari) + Angsuran Bank ({bankCycle.periodLabel}, hari ke-{bankCycle.currentDayInCycle}/30)
+                </span>
+              </div>
+              <span className="font-mono font-bold text-base text-amber-950">
+                {formatRupiah(totalIdealReserve)}
+              </span>
             </div>
-            <span className="font-mono font-bold text-base text-amber-950">
-              {formatRupiah(totalDays * 195400)}
-            </span>
+            <div className="text-[10px] text-amber-900 grid grid-cols-2 gap-2 pt-1 border-t border-amber-200/60 font-mono">
+              <div>Sewa: {formatRupiah(totalAccumulatedRent)} ({totalDays} hr)</div>
+              <div className="text-right">Bank: {formatRupiah(totalAccumulatedBank)} (JT: {bankCycle.dueDateLabel})</div>
+            </div>
           </div>
 
           {/* Tanda Tangan */}
