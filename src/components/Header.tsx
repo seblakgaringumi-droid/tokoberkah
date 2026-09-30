@@ -125,14 +125,30 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
 
-        {/* Supabase Status Pill */}
+        {/* Supabase Status Pill with Quick Server Config */}
         <div
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors cursor-pointer select-none ${
             dbConnected
               ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
               : 'bg-amber-50 border-amber-200 text-amber-900'
           }`}
-          title={dbMessage}
+          title={`${dbMessage}\n(Klik untuk ganti URL Server / Tunnel Supabase)`}
+          onClick={() => {
+            const current = localStorage.getItem('tokoberkah_supabase_url') || 'https://benefit-vast-ratios-senators.trycloudflare.com';
+            const input = window.prompt('Masukkan URL Tunnel / Domain Supabase VPS Anda:', current);
+            if (input !== null) {
+              let trimmed = input.trim();
+              if (trimmed) {
+                if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+                  trimmed = 'https://' + trimmed;
+                }
+                localStorage.setItem('tokoberkah_supabase_url', trimmed);
+              } else {
+                localStorage.removeItem('tokoberkah_supabase_url');
+              }
+              window.location.reload();
+            }
+          }}
         >
           <Database className="w-3.5 h-3.5 opacity-70" />
           <div className="flex items-center gap-1.5">
@@ -146,7 +162,10 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </div>
           <button
-            onClick={onRefreshDb}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRefreshDb();
+            }}
             disabled={isRefreshing}
             aria-label="Refresh database connection"
             className="ml-1 p-0.5 text-gray-400 hover:text-gray-800 rounded transition-transform active:rotate-180"
