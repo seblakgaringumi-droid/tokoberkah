@@ -4,9 +4,14 @@ import { createClient } from '@supabase/supabase-js';
 export const getActiveSupabaseUrl = (): string => {
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('tokoberkah_supabase_url');
-    if (saved && saved.trim()) return saved.trim();
+    // If the saved URL is the old broken pinggy tunnel, clear it automatically
+    if (saved && saved.includes('pinggy-free.link')) {
+      localStorage.removeItem('tokoberkah_supabase_url');
+    } else if (saved && saved.trim()) {
+      return saved.trim();
+    }
   }
-  return (import.meta as any).env?.VITE_SUPABASE_URL || 'https://phmph-202-155-14-124.run.pinggy-free.link';
+  return (import.meta as any).env?.VITE_SUPABASE_URL || 'https://raceroute.id/supabase';
 };
 
 export const SUPABASE_URL = getActiveSupabaseUrl();
