@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 export const SUPABASE_URL = 
-  (import.meta as any).env?.VITE_SUPABASE_URL || 'https://seven-houses-report.loca.lt';
+  (import.meta as any).env?.VITE_SUPABASE_URL || 'https://yhglj-202-155-14-124.run.pinggy-free.link';
 
 export const SUPABASE_ANON_KEY = 
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
@@ -11,19 +11,6 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-  },
-  global: {
-    fetch: (url, options = {}) => {
-      const headers = new Headers(options.headers || {});
-      // Bypass Localtunnel reminder page
-      headers.set('bypass-tunnel-reminder', 'true');
-      headers.set('Bypass-Tunnel-Reminder', 'true');
-      // Pass Basic Auth credentials if Studio/Kong requires it
-      if (!headers.has('Authorization')) {
-        headers.set('Authorization', 'Basic ' + btoa('supabase:this_is_a_secret_change_me'));
-      }
-      return fetch(url, { ...options, headers });
-    },
   },
   realtime: {
     params: {
