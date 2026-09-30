@@ -172,93 +172,118 @@ export default function App() {
 
   // Real-time Database Subscription for Orders Table (Supabase Realtime postgres_changes)
   useEffect(() => {
-    const ordersChannel = supabase
-      .channel('realtime:orders')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'orders' },
-        (payload) => {
-          const newOrder = payload.new as Order;
-          if (!newOrder) return;
+    try {
+      const ordersChannel = supabase
+        .channel('realtime:orders')
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'orders' },
+          (payload) => {
+            const newOrder = payload.new as Order;
+            if (!newOrder) return;
 
-          // 1. Prepend new order if not already in state
-          setOrders((prev) => {
-            if (prev.some((o) => o.id === newOrder.id)) return prev;
-            return [newOrder, ...prev];
-          });
+            setOrders((prev) => {
+              if (prev.some((o) => o.id === newOrder.id)) return prev;
+              return [newOrder, ...prev];
+            });
 
-          // 2. Play audio alert chime (ding.mp3 sound synthesized via Web Audio)
-          playBeep('ding');
+            try {
+              playBeep('ding');
+            } catch {
+              // ignore
+            }
 
-          // 3. Show Web Notification if permitted
-          const title = `Pesanan Baru Masuk! (#ORD-${newOrder.id})`;
-          const body = `Pelanggan: ${newOrder.customer_name || 'Pelanggan'} - Total: ${formatRupiah(newOrder.total_amount)}`;
-          showOrderNotification(title, body, () => {
-            setActiveTab('pesanan');
-          });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'orders' },
-        (payload) => {
-          const updatedOrder = payload.new as Order;
-          if (!updatedOrder) return;
-          setOrders((prev) =>
-            prev.map((o) => (o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o))
-          );
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'orders' },
-        (payload) => {
-          const oldOrder = payload.old as { id: number };
-          if (oldOrder?.id) {
-            setOrders((prev) => prev.filter((o) => o.id !== oldOrder.id));
+            const title = `Pesanan Baru Masuk! (#ORD-${newOrder.id})`;
+            const body = `Pelanggan: ${newOrder.customer_name || 'Pelanggan'} - Total: ${formatRupiah(newOrder.total_amount)}`;
+            showOrderNotification(title, body, () => {
+              setActiveTab('pesanan');
+            });
           }
-        }
-      )
-      .subscribe();
+        )
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'orders' },
+          (payload) => {
+            const updatedOrder = payload.new as Order;
+            if (!updatedOrder) return;
+            setOrders((prev) =>
+              prev.map((o) => (o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o))
+            );
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: 'DELETE', schema: 'public', table: 'orders' },
+          (payload) => {
+            const oldOrder = payload.old as { id: number };
+            if (oldOrder?.id) {
+              setOrders((prev) => prev.filter((o) => o.id !== oldOrder.id));
+            }
+          }
+        )
+        .subscribe((status) => {
+          if (status === 'CHANNEL_ERROR') {
+            console.warn('Realtime websocket unavailable on this tunnel, falling back to HTTP sync.');
+          }
+        });
 
-    return () => {
-      supabase.removeChannel(ordersChannel);
-    };
+      return () => {
+        try {
+          supabase.removeChannel(ordersChannel);
+        } catch {
+          // ignore
+        }
+      };
+    } catch (e) {
+      console.warn('Realtime subscription skipped:', e);
+    }
   }, []);
 
   // Real-time Database Subscription for Sales, Expenses, and Store Wallet
   useEffect(() => {
-    const financesChannel = supabase
-      .channel('realtime:finances')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, async () => {
-        try {
-          const s = await fetchSales();
-          setSales(s);
-        } catch (err) {
-          console.warn('Realtime sales sync note:', err);
-        }
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, async () => {
-        try {
-          const e = await fetchExpenses();
-          setExpenses(e);
-        } catch (err) {
-          console.warn('Realtime expenses sync note:', err);
-        }
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'store_wallets' }, async () => {
-        try {
-          const w = await fetchStoreWallets();
-          if (w) setWallet(w);
-        } catch (err) {
-          console.warn('Realtime wallet sync note:', err);
-        }
-      })
-      .subscribe();
+    try {
+      const financesChannel = supabase
+        .channel('realtime:finances')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, async () => {
+          try {
+            const s = await fetchSales();
+            setSales(s);
+          } catch (err) {
+            console.warn('Realtime sales sync note:', err);
+          }
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, async () => {
+          try {
+            const e = await fetchExpenses();
+            setExpenses(e);
+          } catch (err) {
+            console.warn('Realtime expenses sync note:', err);
+          }
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'store_wallets' }, async () => {
+          try {
+            const w = await fetchStoreWallets();
+            if (w) setWallet(w);
+          } catch (err) {
+            console.warn('Realtime wallet sync note:', err);
+          }
+        })
+        .subscribe((status) => {
+          if (status === 'CHANNEL_ERROR') {
+            // normal when realtime websocket is not tunneled
+          }
+        });
 
-    return () => {
-      supabase.removeChannel(financesChannel);
-    };
+      return () => {
+        try {
+          supabase.removeChannel(financesChannel);
+        } catch {
+          // ignore
+        }
+      };
+    } catch (e) {
+      console.warn('Finances subscription skipped:', e);
+    }
   }, []);
 
   // Derived Badges Counters (Safe with null-checks)
