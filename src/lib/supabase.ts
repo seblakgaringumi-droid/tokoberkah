@@ -26,7 +26,22 @@ const customFetch: typeof fetch = (input, init) => {
     url = url.replace(/\/rest\/v1$/, '/');
   }
 
-  return fetch(url, init);
+  // Clone headers safely
+  const customInit = init ? { ...init } : {};
+  if (customInit.headers) {
+    const headers = new Headers(customInit.headers as any);
+    // PostgREST without Envoy might reject Authorization in CORS preflight unless configured
+    // apikey is sufficient for PostgREST
+    if (headers.has('apikey') && headers.has('Authorization')) {
+      const auth = headers.get('Authorization');
+      if (auth && auth.includes(SUPABASE_ANON_KEY)) {
+        headers.delete('Authorization');
+      }
+    }
+    customInit.headers = headers;
+  }
+
+  return fetch(url, customInit);
 };
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -38,6 +53,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     fetch: customFetch,
   },
   realtime: {
+    // Disable realtime channel if direct tunnel doesn't support WebSocket
     params: {
       eventsPerSecond: 0,
     },
