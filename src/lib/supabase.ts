@@ -6,7 +6,7 @@ export const getActiveSupabaseUrl = (): string => {
     const saved = localStorage.getItem('tokoberkah_supabase_url');
     if (saved && saved.trim()) return saved.trim();
   }
-  return (import.meta as any).env?.VITE_SUPABASE_URL || 'https://benefit-vast-ratios-senators.trycloudflare.com';
+  return (import.meta as any).env?.VITE_SUPABASE_URL || 'https://phmph-202-155-14-124.run.pinggy-free.link';
 };
 
 export const SUPABASE_URL = getActiveSupabaseUrl();
@@ -15,10 +15,27 @@ export const SUPABASE_ANON_KEY =
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE';
 
+// Custom fetch to seamlessly support both standard Supabase Gateway (/rest/v1) and direct PostgREST tunnels!
+const customFetch: typeof fetch = (input, init) => {
+  let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : String(input));
+  
+  // If the tunnel points directly to PostgREST on port 3000, strip the `/rest/v1` prefix so queries hit PostgREST tables directly
+  if (url.includes('/rest/v1/')) {
+    url = url.replace('/rest/v1/', '/');
+  } else if (url.endsWith('/rest/v1')) {
+    url = url.replace(/\/rest\/v1$/, '/');
+  }
+
+  return fetch(url, init);
+};
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
+  },
+  global: {
+    fetch: customFetch,
   },
   realtime: {
     params: {
