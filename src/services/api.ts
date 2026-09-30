@@ -1019,33 +1019,40 @@ export async function deleteSaleItem(
 // ==================== EXPENSES ====================
 
 export async function fetchExpenses(): Promise<Expense[]> {
-  const { data, error } = await supabase
-    .from('expenses')
-    .select('*')
-    .order('created_at', { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Error fetching expenses:', error);
-    throw error;
-  }
-
-  // Normalize source & category if needed
-  return (data || []).map((exp: any) => {
-    let source = exp.source;
-    if (!source) {
-      const cat = (exp.category || '').toUpperCase();
-      const title = (exp.title || '').toUpperCase();
-      if (cat.includes('KAS BESAR') || title.includes('KAS BESAR') || cat.includes('CADANGAN')) {
-        source = 'KAS_BESAR';
-      } else {
-        source = 'LACI';
-      }
+    if (error) {
+      console.warn('Error fetching expenses, using local cache:', error.message);
+      return getLocalExpenses();
     }
-    return {
-      ...exp,
-      source,
-    };
-  });
+
+    const expensesList = (data || []).map((exp: any) => {
+      let source = exp.source;
+      if (!source) {
+        const cat = (exp.category || '').toUpperCase();
+        const title = (exp.title || '').toUpperCase();
+        if (cat.includes('KAS BESAR') || title.includes('KAS BESAR') || cat.includes('CADANGAN')) {
+          source = 'KAS_BESAR';
+        } else {
+          source = 'LACI';
+        }
+      }
+      return {
+        ...exp,
+        source,
+      };
+    });
+
+    saveLocalExpenses(expensesList);
+    return expensesList;
+  } catch (err) {
+    console.warn('Network exception fetching expenses, using local cache:', err);
+    return getLocalExpenses();
+  }
 }
 
 export async function createExpense(expense: { title: string; amount: number; category: string; source?: string }): Promise<Expense> {
@@ -1117,16 +1124,23 @@ export async function deleteExpense(id: string): Promise<void> {
 // ==================== ORDERS ====================
 
 export async function fetchOrders(): Promise<Order[]> {
-  const { data, error } = await supabase
-    .from('orders')
-    .select('*')
-    .order('created_at', { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Error fetching orders:', error);
-    throw error;
+    if (error) {
+      console.warn('Error fetching orders, using local cache:', error.message);
+      return getLocalOrders();
+    }
+    const ordersList = data || [];
+    saveLocalOrders(ordersList);
+    return ordersList;
+  } catch (err) {
+    console.warn('Network exception fetching orders, using local cache:', err);
+    return getLocalOrders();
   }
-  return data || [];
 }
 
 export async function processOnlineSaleToReports(order: Order): Promise<Sale | null> {
@@ -1903,17 +1917,25 @@ export async function recordDebtPayment(payload: {
 // ==================== STORE WALLETS ====================
 
 export async function fetchStoreWallets(): Promise<StoreWallet | null> {
-  const { data, error } = await supabase
-    .from('store_wallets')
-    .select('*')
-    .limit(1)
-    .maybeSingle();
+  try {
+    const { data, error } = await supabase
+      .from('store_wallets')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
 
-  if (error) {
-    console.error('Error fetching store_wallets:', error);
-    return null;
+    if (error) {
+      console.warn('Error fetching store_wallets, using local cache:', error.message);
+      return getLocalWallet();
+    }
+    if (data) {
+      saveLocalWallet(data);
+    }
+    return data || getLocalWallet();
+  } catch (err) {
+    console.warn('Network exception fetching store_wallets, using local cache:', err);
+    return getLocalWallet();
   }
-  return data;
 }
 
 export async function updateStoreWallet(id: number, updates: Partial<StoreWallet>): Promise<StoreWallet> {
