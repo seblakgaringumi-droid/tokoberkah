@@ -408,7 +408,8 @@ export async function adjustProductStock(id: string, deltaStock: number): Promis
       const newStock = roundStock(Math.max(0, Number(current.stock_kg || 0) + deltaStock), current.unit || productUnit);
       await supabase
         .from('products')
-        .update({ stock_kg: newStock })\n        .eq('id', id);
+        .update({ stock_kg: newStock })
+        .eq('id', id);
     }
   } catch (err) {
     console.warn('adjustProductStock note:', err);
