@@ -1,67 +1,47 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Allow dynamic URL overriding from localStorage so users on hosted Workers/PWA can update their Tunnel URL anytime!
+// Project Supabase Baru Toko Berkah
+export const DEFAULT_SUPABASE_URL = 'https://claitrxfqezqdvvckloa.supabase.co';
+export const DEFAULT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsYWl0cnhmcWV6cWR2dmNrbG9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3Nzg5MTYsImV4cCI6MjEwNjM1NDkxNn0.Mq3e79VW-dAcxc9Xdcuy6sYgyQJdAAr2pWzU5sNfNdw';
+
 export const getActiveSupabaseUrl = (): string => {
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('tokoberkah_supabase_url');
-    // If the saved URL is the old broken pinggy tunnel, clear it automatically
-    if (saved && saved.includes('pinggy-free.link')) {
-      localStorage.removeItem('tokoberkah_supabase_url');
-    } else if (saved && saved.trim()) {
-      return saved.trim();
+    // Bersihkan sisa URL lama (tunnel raceroute / pinggy / akun lama)
+    if (!saved || saved.includes('raceroute') || saved.includes('pinggy') || saved.includes('kquxfvcbgogjpthhsseg')) {
+      localStorage.setItem('tokoberkah_supabase_url', DEFAULT_SUPABASE_URL);
+      return DEFAULT_SUPABASE_URL;
     }
+    return saved.trim();
   }
-  return (import.meta as any).env?.VITE_SUPABASE_URL || 'https://raceroute.id/supabase';
+  return (import.meta as any).env?.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+};
+
+export const getActiveSupabaseAnonKey = (): string => {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('tokoberkah_supabase_anon_key');
+    // Bersihkan sisa anon key lama
+    if (!saved || saved.length < 50 || saved.includes('dc_X5iR_VP_qT0zsiyj_I') || saved.includes('xYs1LZHOYbNssk_6T0zpLzsXACjJxh4ksJnCMkUky9s')) {
+      localStorage.setItem('tokoberkah_supabase_anon_key', DEFAULT_ANON_KEY);
+      return DEFAULT_ANON_KEY;
+    }
+    return saved.trim();
+  }
+  return (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || DEFAULT_ANON_KEY;
 };
 
 export const SUPABASE_URL = getActiveSupabaseUrl();
+export const SUPABASE_ANON_KEY = getActiveSupabaseAnonKey();
 
-export const SUPABASE_ANON_KEY = 
-  (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE';
-
-// Custom fetch to seamlessly support both standard Supabase Gateway (/rest/v1) and direct PostgREST tunnels!
-const customFetch: typeof fetch = async (input, init) => {
-  let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : String(input));
-  
-  // If the tunnel points directly to PostgREST on port 3000, strip the `/rest/v1` prefix so queries hit PostgREST tables directly
-  if (url.includes('/rest/v1/')) {
-    url = url.replace('/rest/v1/', '/');
-  } else if (url.endsWith('/rest/v1')) {
-    url = url.replace(/\/rest\/v1$/, '/');
-  }
-
-  // Clone headers safely
-  const customInit: RequestInit = init ? { ...init } : {};
-  const headers = new Headers(customInit.headers || (input instanceof Request ? input.headers : undefined));
-
-  // Ensure apikey is present
-  if (!headers.has('apikey')) {
-    headers.set('apikey', SUPABASE_ANON_KEY);
-  }
-
-  // PostgREST accepts Authorization: Bearer <ANON_KEY>
-  if (!headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${SUPABASE_ANON_KEY}`);
-  }
-
-  customInit.headers = headers;
-
-  return fetch(url, customInit);
-};
-
+// Supabase Client Resmi standar Cloud
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
   },
-  global: {
-    fetch: customFetch,
-  },
   realtime: {
-    // Disable realtime channel if direct tunnel doesn't support WebSocket
     params: {
-      eventsPerSecond: 0,
+      eventsPerSecond: 10,
     },
   },
 });
