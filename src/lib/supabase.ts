@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 export const SUPABASE_URL = 
-  (import.meta as any).env?.VITE_SUPABASE_URL || 'http://202.155.14.124:8000';
+  (import.meta as any).env?.VITE_SUPABASE_URL || 'https://metal-pens-relate.loca.lt';
 
 export const SUPABASE_ANON_KEY = 
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
