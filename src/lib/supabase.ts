@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 export const SUPABASE_URL = 
-  (import.meta as any).env?.VITE_SUPABASE_URL || 'https://metal-pens-relate.loca.lt';
+  (import.meta as any).env?.VITE_SUPABASE_URL || 'https://seven-houses-report.loca.lt';
 
 export const SUPABASE_ANON_KEY = 
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
