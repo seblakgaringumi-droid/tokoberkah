@@ -16,7 +16,7 @@ export const SUPABASE_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE';
 
 // Custom fetch to seamlessly support both standard Supabase Gateway (/rest/v1) and direct PostgREST tunnels!
-const customFetch: typeof fetch = (input, init) => {
+const customFetch: typeof fetch = async (input, init) => {
   let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : String(input));
   
   // If the tunnel points directly to PostgREST on port 3000, strip the `/rest/v1` prefix so queries hit PostgREST tables directly
@@ -27,19 +27,20 @@ const customFetch: typeof fetch = (input, init) => {
   }
 
   // Clone headers safely
-  const customInit = init ? { ...init } : {};
-  if (customInit.headers) {
-    const headers = new Headers(customInit.headers as any);
-    // PostgREST without Envoy might reject Authorization in CORS preflight unless configured
-    // apikey is sufficient for PostgREST
-    if (headers.has('apikey') && headers.has('Authorization')) {
-      const auth = headers.get('Authorization');
-      if (auth && auth.includes(SUPABASE_ANON_KEY)) {
-        headers.delete('Authorization');
-      }
-    }
-    customInit.headers = headers;
+  const customInit: RequestInit = init ? { ...init } : {};
+  const headers = new Headers(customInit.headers || (input instanceof Request ? input.headers : undefined));
+
+  // Ensure apikey is present
+  if (!headers.has('apikey')) {
+    headers.set('apikey', SUPABASE_ANON_KEY);
   }
+
+  // PostgREST accepts Authorization: Bearer <ANON_KEY>
+  if (!headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${SUPABASE_ANON_KEY}`);
+  }
+
+  customInit.headers = headers;
 
   return fetch(url, customInit);
 };
