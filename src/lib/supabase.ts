@@ -1,14 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Project Supabase Resmi Toko Berkah (Akun Lama Aktif: kquxfvcbgogjpthhsseg)
+// Project Supabase Resmi Toko Berkah (Database Aktif claitrxfqezqdvvckloa)
 export const DEFAULT_SUPABASE_URL = 'https://claitrxfqezqdvvckloa.supabase.co';
 export const DEFAULT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsYWl0cnhmcWV6cWR2dmNrbG9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3Nzg5MTYsImV4cCI6MjEwNjM1NDkxNn0.Mq3e79VW-dAcxc9Xdcuy6sYgyQJdAAr2pWzU5sNfNdw';
 
 export const getActiveSupabaseUrl = (): string => {
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('tokoberkah_supabase_url');
-    // Bersihkan sisa tunnel lama (raceroute / pinggy / akun uji coba)
-    if (!saved || saved.includes('raceroute') || saved.includes('pinggy') || saved.includes('claitrxfqezqdvvckloa')) {
+    // Bersihkan URL lama (tunnel / akun lama yang tidak valid)
+    if (
+      !saved ||
+      saved.includes('raceroute') ||
+      saved.includes('pinggy') ||
+      saved.includes('kquxfvcbgogjpthhsseg') ||
+      saved.includes('loca.lt')
+    ) {
       localStorage.setItem('tokoberkah_supabase_url', DEFAULT_SUPABASE_URL);
       return DEFAULT_SUPABASE_URL;
     }
@@ -20,8 +26,14 @@ export const getActiveSupabaseUrl = (): string => {
 export const getActiveSupabaseAnonKey = (): string => {
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('tokoberkah_supabase_anon_key');
-    // Bersihkan sisa anon key lama
-    if (!saved || saved.length < 50 || saved.includes('dc_X5iR_VP_qT0zsiyj_I') || saved.includes('Mq3e79VW-dAcxc9Xdcuy6sYgyQJdAAr2pWzU5sNfNdw')) {
+    // Bersihkan key lama yang invalid atau kadaluwarsa
+    if (
+      !saved ||
+      saved.length < 50 ||
+      saved.includes('dc_X5iR_VP_qT0zsiyj_I') ||
+      saved.includes('xYs1LZHOYbNssk_6T0zpLzsXACjJxh4ksJnCMkUky9s') ||
+      saved.includes('TpvjA3fYOi4PGm9T72l7OG5Ey36ZFpLQgRch8R_8jVg')
+    ) {
       localStorage.setItem('tokoberkah_supabase_anon_key', DEFAULT_ANON_KEY);
       return DEFAULT_ANON_KEY;
     }
@@ -33,7 +45,7 @@ export const getActiveSupabaseAnonKey = (): string => {
 export const SUPABASE_URL = getActiveSupabaseUrl();
 export const SUPABASE_ANON_KEY = getActiveSupabaseAnonKey();
 
-// Supabase Client Resmi Toko Berkah
+// Supabase Client Resmi
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
