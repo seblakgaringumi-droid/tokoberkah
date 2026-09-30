@@ -72,6 +72,69 @@ function saveLocalImage(id: string, url: string | null) {
   }
 }
 
+function getLocalWallet(): StoreWallet {
+  try {
+    const raw = localStorage.getItem(WALLET_CACHE_KEY);
+    return raw ? JSON.parse(raw) : {
+      id: 1,
+      initial_cash: 0,
+      operational_budget: 0,
+      shopping_budget: 0,
+      owner_budget: 0,
+    };
+  } catch {
+    return {
+      id: 1,
+      initial_cash: 0,
+      operational_budget: 0,
+      shopping_budget: 0,
+      owner_budget: 0,
+    };
+  }
+}
+
+function saveLocalWallet(wallet: StoreWallet) {
+  try {
+    localStorage.setItem(WALLET_CACHE_KEY, JSON.stringify(wallet));
+  } catch (e) {
+    console.warn('Local storage save wallet note:', e);
+  }
+}
+
+function getLocalExpenses(): Expense[] {
+  try {
+    const raw = localStorage.getItem(EXPENSES_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalExpenses(expenses: Expense[]) {
+  try {
+    localStorage.setItem(EXPENSES_CACHE_KEY, JSON.stringify(expenses));
+  } catch (e) {
+    console.warn('Local storage save expenses note:', e);
+  }
+}
+
+function getLocalOrders(): Order[] {
+  try {
+    const raw = localStorage.getItem(ORDERS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalOrders(orders: Order[]) {
+  try {
+    localStorage.setItem(ORDERS_CACHE_KEY, JSON.stringify(orders));
+  } catch (e) {
+    console.warn('Local storage save orders note:', e);
+  }
+}
+
 // ==================== PRODUCTS ====================
 
 export async function fetchProducts(): Promise<Product[]> {
@@ -197,7 +260,6 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
         }
       }
       if (cleanImageUrl) {
-        // Retry with 'image' column in case database table used 'image' instead of 'image_url'
         const withAlternativeColumn = { ...cleanPayload, image: cleanImageUrl } as any;
         delete withAlternativeColumn.image_url;
         const { data: retryData, error: retryError } = await supabase
@@ -233,7 +295,6 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
     cleanUpdates.min_stock = roundStock(Number(cleanUpdates.min_stock) || 0, cleanUpdates.unit);
   }
 
-  // Ensure no blob: URL is sent
   if ('image_url' in cleanUpdates) {
     if (cleanUpdates.image_url && cleanUpdates.image_url.startsWith('blob:')) {
       cleanUpdates.image_url = null;
@@ -241,7 +302,6 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
     saveLocalImage(id, cleanUpdates.image_url || null);
   }
 
-  // Update local cache immediately
   const localList = getLocalProducts();
   const idx = localList.findIndex((p) => String(p.id) === String(id));
   let updatedLocal: Product;
@@ -348,8 +408,7 @@ export async function adjustProductStock(id: string, deltaStock: number): Promis
       const newStock = roundStock(Math.max(0, Number(current.stock_kg || 0) + deltaStock), current.unit || productUnit);
       await supabase
         .from('products')
-        .update({ stock_kg: newStock })
-        .eq('id', id);
+        .update({ stock_kg: newStock })\n        .eq('id', id);
     }
   } catch (err) {
     console.warn('adjustProductStock note:', err);
@@ -440,7 +499,6 @@ export interface CheckoutPayload {
     unit: string;
     subtotal: number;
   }[];
-  // If payment_method is UTANG
   debt_due_date?: string;
 }
 
@@ -476,7 +534,6 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
     customer_phone: payload.customer_phone,
   };
 
-  // Pre-save to local sales cache
   const cachedSales = getLocalSales();
   saveLocalSales([localSale, ...cachedSales]);
 
@@ -484,7 +541,6 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
   let finalItems = constructedItems;
 
   try {
-    // 1. Insert into sales
     const { data: saleData, error: saleError } = await supabase
       .from('sales')
       .insert([{
@@ -506,7 +562,6 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         customer_name: payload.customer_name,
       };
 
-      // 2. Insert into sale_items
       const saleItemsPayload = payload.items.map(item => ({
         sale_id: saleData.id,
         product_id: item.product.id,
@@ -533,11 +588,9 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         finalSale.sale_items = finalItems;
       }
 
-      // Update cache with real Supabase sale ID
       const updatedList = getLocalSales().map((s) => (s.id === tempSaleId ? finalSale : s));
       saveLocalSales(updatedList);
 
-      // 3. Deduct stock for each product
       for (const item of payload.items) {
         try {
           const itemUnit = item.unit || item.product.unit;
@@ -551,7 +604,6 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         }
       }
 
-      // 4. If payment is UTANG, also create record in debts_credits
       if (payload.payment_method === 'UTANG') {
         const debtPayload = {
           type: 'PIUTANG',
@@ -574,7 +626,6 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
     console.warn('processSale Supabase write exception, using local store:', err);
   }
 
-  // Guarantee UTANG is preserved in local debts cache even if Supabase had an exception
   if (payload.payment_method === 'UTANG') {
     const existingDebts = getLocalDebts();
     const noteTag = (finalSale?.id || tempSaleId).slice(0, 8);
@@ -636,7 +687,6 @@ export async function fetchSales(): Promise<Sale[]> {
 
     if (error) {
       console.warn('Sale items join fallback:', error.message);
-      // Fallback: simple sales + sale_items
       const { data: simpleSales, error: simpleErr } = await supabase
         .from('sales')
         .select('*')
@@ -647,7 +697,6 @@ export async function fetchSales(): Promise<Sale[]> {
         return [];
       }
 
-      // Try to fetch sale_items separately
       let allItems: any[] = [];
       try {
         const saleIds = simpleSales.map(s => s.id);
@@ -727,7 +776,6 @@ export async function fetchSales(): Promise<Sale[]> {
         };
       });
 
-      // If items array is empty but was cached with items, use cache
       if (items.length === 0 && cachedMatch?.items && cachedMatch.items.length > 0) {
         items = cachedMatch.items;
       }
@@ -742,7 +790,6 @@ export async function fetchSales(): Promise<Sale[]> {
       };
     });
 
-    // Auto sync status utang jika ada perubahan status di debts_credits
     const cachedDebts = getLocalDebts();
     const syncedSales = normalizedSales.map((s) => {
       if ((s.payment_method || '').toUpperCase() !== 'UTANG') return s;
@@ -806,11 +853,6 @@ export interface DeleteSaleItemResult {
   error?: string;
 }
 
-/**
- * Hapus item tertentu dari riwayat transaksi penjualan (sales & sale_items),
- * dengan opsi mengembalikan stok produk ke database/cache, serta sinkronisasi
- * total belanja dan catatan utang jika metode pembayaran adalah BON/UTANG.
- */
 export async function deleteSaleItem(
   saleId: string,
   itemId: string,
@@ -824,7 +866,6 @@ export async function deleteSaleItem(
     const existingSale = localSales.find(s => s.id === saleId);
     const existingItems = existingSale?.items || existingSale?.sale_items || [];
     
-    // Temukan data item yang akan dihapus
     const targetItem = existingItems.find(it => 
       (itemId && it.id === itemId) || 
       (productId && it.product_id === productId)
@@ -835,7 +876,6 @@ export async function deleteSaleItem(
     const actualQty = qtyToRestore || Number(targetItem?.qty_kg || targetItem?.qty || 1);
     const actualSubtotal = subtotalToDeduct || Number(targetItem?.subtotal || 0);
 
-    // 1. Hapus record item dari tabel sale_items Supabase
     let deletedFromDb = false;
     if (itemId && !itemId.startsWith('item_modal_') && !itemId.startsWith('item_temp_')) {
       const { error: delErr } = await supabase
@@ -854,11 +894,10 @@ export async function deleteSaleItem(
         .eq('product_id', productId);
     }
 
-    // 2. Jika transaksi ini berasal dari pesanan online, perbarui items_json & total_amount di tabel orders
     if (existingSale) {
       const orderMatch = (existingSale.notes || '').match(/#ORD-(\d+)/i) || 
                          (existingSale.notes || '').match(/ORD-(\d+)/i) || 
-                         existingSale.id.match(/sale_online_(\d+)/i);
+                         existingSale.id.match(/sale_online_(\\d+)/i);
       if (orderMatch && orderMatch[1]) {
         try {
           const orderId = Number(orderMatch[1]);
@@ -882,7 +921,6 @@ export async function deleteSaleItem(
       }
     }
 
-    // 3. Kembalikan stok produk jika diminta
     if (restoreStock && productId) {
       try {
         const { data: prodData } = await supabase
@@ -902,7 +940,6 @@ export async function deleteSaleItem(
         console.warn('Failed to restore Supabase stock:', stockErr);
       }
 
-      // Perbarui cache produk lokal
       const localProds = getLocalProducts();
       const updatedProds = localProds.map(p => {
         if (p.id === productId) {
@@ -913,7 +950,6 @@ export async function deleteSaleItem(
       saveLocalProducts(updatedProds);
     }
 
-    // 4. Hitung ulang total belanja transaksi
     const remainingItems = existingItems.filter(it => 
       !((itemId && it.id === itemId) || (productId && it.product_id === productId))
     );
@@ -928,7 +964,6 @@ export async function deleteSaleItem(
       console.warn('Failed to update sale total in Supabase:', saleUpdateErr);
     }
 
-    // 5. Jika metode pembayaran adalah UTANG / BON, sinkronkan catatan piutang
     if (existingSale?.payment_method === 'UTANG') {
       const noteTag = saleId.slice(0, 8);
       try {
@@ -955,7 +990,6 @@ export async function deleteSaleItem(
         console.warn('Failed to sync debts on sale item delete:', debtErr);
       }
 
-      // Perbarui cache buku utang lokal
       const localDebts = getLocalDebts();
       const updatedDebts = localDebts.map(d => {
         if (d.notes?.includes(noteTag)) {
@@ -973,7 +1007,6 @@ export async function deleteSaleItem(
       saveLocalDebts(updatedDebts);
     }
 
-    // 6. Simpan pembaruan ke cache transaksi lokal
     let updatedSale: Sale | undefined;
     const updatedSales = localSales.map(s => {
       if (s.id === saleId) {
@@ -1070,7 +1103,6 @@ export async function createExpense(expense: { title: string; amount: number; ca
     .single();
 
   if (error) {
-    // If column 'source' does not exist in the database table schema, fallback
     if (error.message && (error.message.toLowerCase().includes('source') || error.message.toLowerCase().includes('column'))) {
       console.warn('Fallback: column source not found in expenses table, saving without source column');
       const fallbackExpense = {
@@ -1120,7 +1152,6 @@ export async function deleteExpense(id: string): Promise<void> {
   }
 }
 
-
 // ==================== ORDERS ====================
 
 export async function fetchOrders(): Promise<Order[]> {
@@ -1146,12 +1177,10 @@ export async function fetchOrders(): Promise<Order[]> {
 export async function processOnlineSaleToReports(order: Order): Promise<Sale | null> {
   try {
     const orderIdStr = `#ORD-${order.id}`;
-    // Preserve original payment method: COD, TRANSFER, QRIS, etc.
     const rawPaymentMethod = order.payment_method || 'COD';
     const paymentMethodUpper = rawPaymentMethod.toUpperCase();
     const isCash = paymentMethodUpper.includes('COD') || paymentMethodUpper.includes('TUNAI') || paymentMethodUpper === 'CASH' || paymentMethodUpper.includes('BAYAR DI TEMPAT');
 
-    // Parse items safely with fallbacks from multiple possible fields
     let rawItems: any[] = [];
     if (Array.isArray(order.items_json)) {
       rawItems = order.items_json;
@@ -1168,7 +1197,6 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       rawItems = (order as any).order_items;
     }
 
-    // Fallback if rawItems is somehow empty
     if (rawItems.length === 0) {
       rawItems = [{
         product_id: `prod_online_${order.id}`,
@@ -1194,7 +1222,7 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       const qty = Number(item.qty || item.quantity || item.amount || item.qty_kg || 1);
       const unit = item.unit || item.satuan || 'pcs';
       const price = Number(item.price || item.selling_price || item.unit_price || (item.subtotal ? item.subtotal / qty : 0));
-      const subtotal = Number(item.subtotal || (price * qty) || (price * qty) || 0);
+      const subtotal = Number(item.subtotal || (price * qty) || 0);
       const costPrice = Number(item.cost_price) || (price * 0.8);
 
       const foundProd = productMap[prodId] || {
@@ -1245,7 +1273,6 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       customer_phone: order.customer_phone
     };
 
-    // Check existing in local cache
     const cachedSales = getLocalSales();
     const existingIndex = cachedSales.findIndex(s => s.notes?.includes(orderIdStr) || s.id === tempSaleId || s.id.startsWith(`sale_online_${order.id}`));
     if (existingIndex >= 0) {
@@ -1262,7 +1289,6 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       saveLocalSales([localSale, ...cachedSales]);
     }
 
-    // Try inserting into Supabase sales & sale_items tables (with deduplication & repair check)
     try {
       const { data: existingDbSales } = await supabase
         .from('sales')
@@ -1272,8 +1298,6 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
 
       if (existingDbSales && existingDbSales.length > 0) {
         const existingSaleId = existingDbSales[0].id;
-        
-        // Ensure missing sale_items are saved to DB
         try {
           const { data: existingDbItems } = await supabase
             .from('sale_items')
@@ -1324,7 +1348,6 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
 
       if (!saleError && saleData) {
         const saleId = saleData.id;
-        // Insert sale_items
         if (constructedItems.length > 0) {
           const itemsPayload = constructedItems.map(it => ({
             sale_id: saleId,
@@ -1399,7 +1422,6 @@ export async function syncCompletedOrdersToSales(): Promise<{ syncedCount: numbe
 }
 
 export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PROCESSED' | 'COMPLETED' | 'CANCELLED'): Promise<Order> {
-  // 1. Fetch current order to check state
   let currentOrder: Order | null = null;
   try {
     const { data } = await supabase
@@ -1412,7 +1434,6 @@ export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PR
     console.warn('Error reading order before update:', fetchErr);
   }
 
-  // 2. If moving from PENDING to PROCESSED, deduct stock for products in items_json
   if (status === 'PROCESSED' && currentOrder && currentOrder.status === 'PENDING' && currentOrder.items_json) {
     try {
       const items = Array.isArray(currentOrder.items_json) ? currentOrder.items_json : [];
@@ -1445,7 +1466,6 @@ export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PR
     }
   }
 
-  // 3. Update status in Supabase
   const { data, error } = await supabase
     .from('orders')
     .update({ status })
@@ -1460,7 +1480,6 @@ export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PR
 
   const updatedOrder = data || { ...currentOrder, id: orderId, status };
 
-  // 4. If completing the order (COMPLETED), record to Sales & Reports with original timestamp
   if (status === 'COMPLETED') {
     try {
       await processOnlineSaleToReports(updatedOrder);
@@ -1503,10 +1522,6 @@ export interface UtangSyncInfo {
   };
 }
 
-/**
- * Helper terpusat untuk mendeteksi status utang/piutang transaksi kasir secara akurat dan real-time.
- * Menghubungkan record penjualan (sales) dengan catatan di buku utang (debts_credits).
- */
 export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo {
   const isUtang = (sale.payment_method || '').toUpperCase() === 'UTANG';
   if (!isUtang) {
@@ -1536,7 +1551,6 @@ export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo
     if (sale.id && notes.includes(sale.id.toLowerCase())) return true;
     if (sale.notes && d.id && sale.notes.toLowerCase().includes(d.id.toLowerCase())) return true;
 
-    // Pencocokan nama pelanggan jika tercatat sama & nominal sama
     const custName = (sale.customer_name || (sale.notes ? sale.notes.replace(/^Pelanggan:\s*/i, '') : '')).trim().toLowerCase();
     if (
       custName &&
@@ -1590,12 +1604,6 @@ export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo
   };
 }
 
-/**
- * Sinkronisasi otomatis dua arah antara data transaksi penjualan (sales)
- * dan buku piutang pelanggan (debts_credits).
- * Jika piutang di buku utang lunas, status penjualan disinkronkan menjadi 'paid' (Lunas)
- * baik di Supabase maupun LocalStorage.
- */
 export async function syncSalesWithDebts(
   inputSales?: Sale[],
   inputDebts?: DebtCredit[]
@@ -1610,9 +1618,7 @@ export async function syncSalesWithDebts(
         allDebts = data;
         saveLocalDebts(data);
       }
-    } catch {
-      // Fallback
-    }
+    } catch {}
   }
 
   let updatedCount = 0;
@@ -1626,7 +1632,6 @@ export async function syncSalesWithDebts(
 
     if (sale.status !== targetStatus) {
       updatedCount++;
-      // Sync update to Supabase
       supabase
         .from('sales')
         .update({ status: targetStatus })
@@ -1725,7 +1730,6 @@ export async function payDebtCredit(id: string, paymentAmount: number): Promise<
   let finalDebt: DebtCredit | null = currentLocal ? { ...currentLocal, remaining_amount: newRemaining, status: newStatus as any } : null;
 
   try {
-    // 1. Fetch current remaining amount from DB
     const { data: current, error: fetchErr } = await supabase
       .from('debts_credits')
       .select('*')
@@ -1756,7 +1760,6 @@ export async function payDebtCredit(id: string, paymentAmount: number): Promise<
     console.warn('payDebtCredit Supabase update note, recorded in local storage:', err);
   }
 
-  // 2. AUTO SINKRONKAN STATUS KE TRANSAKSI PENJUALAN KASIR (SALES & STRUK)
   try {
     const debtObj = finalDebt || currentLocal;
     if (debtObj) {
@@ -1793,7 +1796,6 @@ export async function payDebtCredit(id: string, paymentAmount: number): Promise<
         saveLocalSales(updatedSales);
       }
 
-      // Update in Supabase sales
       if (saleTag) {
         const { data: matchedSales } = await supabase
           .from('sales')
@@ -1845,7 +1847,6 @@ export async function fetchDebtPayments(): Promise<DebtPayment[]> {
       .order('created_at', { ascending: false });
 
     if (error) {
-      // Table may not exist yet in Supabase or network error, use cached
       return getLocalDebtPayments();
     }
     const safeList = (data || []).filter(Boolean);
@@ -1878,11 +1879,9 @@ export async function recordDebtPayment(payload: {
     notes: payload.notes || null,
   };
 
-  // 1. Save to local debt payments cache
   const cachedPayments = getLocalDebtPayments();
   saveLocalDebtPayments([newPayment, ...cachedPayments]);
 
-  // 2. Save cash flow entry
   const cfEntry: CashFlowEntry = {
     id: `cf_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     type: 'INCOME_DEBT_PAYMENT',
@@ -1895,10 +1894,8 @@ export async function recordDebtPayment(payload: {
   const cachedCashFlow = getLocalCashFlow();
   saveLocalCashFlow([cfEntry, ...cachedCashFlow]);
 
-  // 3. Update the debt remaining balance
   await payDebtCredit(payload.debt_id, newPayment.amount);
 
-  // 4. Try remote sync to Supabase (graceful fallback)
   try {
     await supabase.from('debt_payments').insert([newPayment]);
   } catch (err) {
@@ -1970,7 +1967,6 @@ export async function upsertStoreWallet(wallet: StoreWallet): Promise<StoreWalle
 // ==================== STORE PROFILE & RECEIPT SETTINGS ====================
 
 export async function fetchStoreProfile(): Promise<StoreProfile> {
-  // 1. Check local storage cache first
   let cached: StoreProfile = DEFAULT_STORE_PROFILE;
   try {
     const raw = localStorage.getItem(STORE_PROFILE_CACHE_KEY);
@@ -1981,7 +1977,6 @@ export async function fetchStoreProfile(): Promise<StoreProfile> {
     console.warn('Error reading store profile cache:', e);
   }
 
-  // 2. Try fetching from Supabase table `store_profile` or `settings` if available
   try {
     const { data, error } = await supabase
       .from('store_profile')
@@ -2004,9 +1999,7 @@ export async function fetchStoreProfile(): Promise<StoreProfile> {
       } catch {}
       return merged;
     }
-  } catch (err) {
-    // If table doesn't exist yet, gracefully use local cached
-  }
+  } catch (err) {}
 
   return cached;
 }
@@ -2022,14 +2015,12 @@ export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProf
     footer_quote: profile.footer_quote?.trim() || DEFAULT_STORE_PROFILE.footer_quote,
   };
 
-  // 1. Save to local storage for immediate persistence
   try {
     localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(cleanProfile));
   } catch (e) {
     console.warn('Failed to save store profile to localStorage:', e);
   }
 
-  // 2. Attempt upsert to Supabase
   try {
     await supabase
       .from('store_profile')
@@ -2045,148 +2036,14 @@ export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProf
   return cleanProfile;
 }
 
-// ==================== INITIAL DATA SEEDER (IF EMPTY) ====================
+// ==================== INITIAL DATA SEEDER (DISABLED - USE REAL SUPABASE) ====================
 
 export async function seedInitialProductsIfEmpty(): Promise<boolean> {
   try {
     const { data: existing, error } = await supabase.from('products').select('id').limit(1);
     if (error) return false;
-    if (existing && existing.length > 0) return false; // Already has data
-
-    const sampleProducts = [
-      {
-        name: 'Beras Pandan Wangi Super',
-        category: 'Sembako',
-        cost_price: 13500,
-        selling_price: 16000,
-        stock_kg: 100,
-        min_stock: 20,
-        is_active: true,
-        unit: 'kg',
-        barcode: '899100100001',
-      },
-      {
-        name: 'Minyak Goreng Bimoli 2 Liter',
-        category: 'Sembako',
-        cost_price: 32000,
-        selling_price: 36000,
-        stock_kg: 40,
-        min_stock: 10,
-        is_active: true,
-        unit: 'pouch',
-        barcode: '899100100002',
-      },
-      {
-        name: 'Gula Pasir Gulaku 1kg',
-        category: 'Sembako',
-        cost_price: 15500,
-        selling_price: 18000,
-        stock_kg: 50,
-        min_stock: 15,
-        is_active: true,
-        unit: 'bungkus',
-        barcode: '899100100003',
-      },
-      {
-        name: 'Telur Ayam Ras Segar',
-        category: 'Sembako',
-        cost_price: 26000,
-        selling_price: 29500,
-        stock_kg: 35,
-        min_stock: 10,
-        is_active: true,
-        unit: 'kg',
-        barcode: '899100100004',
-      },
-      {
-        name: 'Bawang Merah Brebes Pilihan',
-        category: 'Bumbu Dapur',
-        cost_price: 30000,
-        selling_price: 38000,
-        stock_kg: 15,
-        min_stock: 5,
-        is_active: true,
-        unit: 'kg',
-        barcode: '899100100005',
-      },
-      {
-        name: 'Bawang Putih Kating',
-        category: 'Bumbu Dapur',
-        cost_price: 34000,
-        selling_price: 42000,
-        stock_kg: 12,
-        min_stock: 5,
-        is_active: true,
-        unit: 'kg',
-        barcode: '899100100006',
-      },
-      {
-        name: 'Cabai Merah Keriting Segar',
-        category: 'Sayur & Bumbu',
-        cost_price: 40000,
-        selling_price: 52000,
-        stock_kg: 8,
-        min_stock: 5,
-        is_active: true,
-        unit: 'kg',
-        barcode: '899100100007',
-      },
-      {
-        name: 'Tepung Terigu Segitiga Biru 1kg',
-        category: 'Sembako',
-        cost_price: 11000,
-        selling_price: 13000,
-        stock_kg: 30,
-        min_stock: 8,
-        is_active: true,
-        unit: 'bungkus',
-        barcode: '899100100008',
-      },
-      {
-        name: 'Indomie Goreng Original (Karton)',
-        category: 'Makanan Instan',
-        cost_price: 108000,
-        selling_price: 118000,
-        stock_kg: 15,
-        min_stock: 5,
-        is_active: true,
-        unit: 'karton',
-        barcode: '899100100009',
-      },
-      {
-        name: 'Kecap Manis Bango 520ml',
-        category: 'Bumbu Dapur',
-        cost_price: 21000,
-        selling_price: 24500,
-        stock_kg: 24,
-        min_stock: 6,
-        is_active: true,
-        unit: 'pouch',
-        barcode: '899100100010',
-      },
-    ];
-
-    const { error: insertErr } = await supabase.from('products').insert(sampleProducts);
-    if (insertErr) {
-      console.warn('Auto-seed products info:', insertErr.message);
-      return false;
-    }
-
-    // Also initialize store_wallets if not present
-    const { data: walletData } = await supabase.from('store_wallets').select('id').limit(1);
-    if (!walletData || walletData.length === 0) {
-      await supabase.from('store_wallets').insert([{
-        id: 1,
-        initial_cash: 500000,
-        shopping_budget: 2000000,
-        operational_budget: 750000,
-        owner_budget: 1000000,
-      }]);
-    }
-
-    return true;
+    return existing && existing.length > 0;
   } catch (err) {
-    console.warn('Seeding check exception:', err);
     return false;
   }
 }
