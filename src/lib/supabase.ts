@@ -12,10 +12,20 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     persistSession: true,
     autoRefreshToken: true,
   },
+  global: {
+    fetch: (url, options = {}) => {
+      const headers = new Headers(options.headers || {});
+      // Bypass Localtunnel reminder page
+      headers.set('bypass-tunnel-reminder', 'true');
+      headers.set('Bypass-Tunnel-Reminder', 'true');
+      // Pass Basic Auth credentials if Studio/Kong requires it
+      if (!headers.has('Authorization')) {
+        headers.set('Authorization', 'Basic ' + btoa('supabase:this_is_a_secret_change_me'));
+      }
+      return fetch(url, { ...options, headers });
+    },
+  },
   realtime: {
-    // Disable realtime websocket to prevent HTTPS -> HTTP Mixed Content websocket errors
-    // when accessing frontend via HTTPS without an HTTPS SSL proxy setup.
-    // Standard REST API calls (fetch/XHR) and HTTP fallback polling handle all database queries.
     params: {
       eventsPerSecond: 0,
     },
