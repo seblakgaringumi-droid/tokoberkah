@@ -7,7 +7,20 @@ export const SUPABASE_ANON_KEY =
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE';
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+  realtime: {
+    // Disable realtime websocket to prevent HTTPS -> HTTP Mixed Content websocket errors
+    // when accessing frontend via HTTPS without an HTTPS SSL proxy setup.
+    // Standard REST API calls (fetch/XHR) and HTTP fallback polling handle all database queries.
+    params: {
+      eventsPerSecond: 0,
+    },
+  },
+});
 
 /**
  * Check if the connection to Supabase is active
