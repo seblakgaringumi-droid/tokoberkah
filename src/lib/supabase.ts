@@ -1,7 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
 
-export const SUPABASE_URL = 
-  (import.meta as any).env?.VITE_SUPABASE_URL || 'https://benefit-vast-ratios-senators.trycloudflare.com';
+// Allow dynamic URL overriding from localStorage so users on hosted Workers/PWA can update their Tunnel URL anytime!
+export const getActiveSupabaseUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('tokoberkah_supabase_url');
+    if (saved && saved.trim()) return saved.trim();
+  }
+  return (import.meta as any).env?.VITE_SUPABASE_URL || 'https://benefit-vast-ratios-senators.trycloudflare.com';
+};
+
+export const SUPABASE_URL = getActiveSupabaseUrl();
 
 export const SUPABASE_ANON_KEY = 
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
@@ -18,6 +26,21 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     },
   },
 });
+
+export const setCustomSupabaseUrl = (newUrl: string) => {
+  if (typeof window !== 'undefined') {
+    if (!newUrl || !newUrl.trim()) {
+      localStorage.removeItem('tokoberkah_supabase_url');
+    } else {
+      let cleaned = newUrl.trim();
+      if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+        cleaned = 'https://' + cleaned;
+      }
+      localStorage.setItem('tokoberkah_supabase_url', cleaned);
+    }
+    window.location.reload();
+  }
+};
 
 /**
  * Check if the connection to Supabase is active
