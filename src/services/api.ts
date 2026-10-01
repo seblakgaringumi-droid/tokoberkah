@@ -46,7 +46,6 @@ function getLocalImageMap(): Record<string, string> {
   try {
     const raw = localStorage.getItem(PRODUCT_IMAGES_KEY);
     const map = raw ? JSON.parse(raw) : {};
-    // Clean out any expired blob URLs from cache
     Object.keys(map).forEach((key) => {
       if (typeof map[key] === 'string' && map[key].startsWith('blob:')) {
         delete map[key];
@@ -158,7 +157,6 @@ export async function fetchProducts(): Promise<Product[]> {
       return [];
     }
 
-    // Clean floating point artifacts and resolve permanent database image
     const existingLocal = getLocalProducts();
     const localVariantMap: Record<string, any> = {};
     existingLocal.forEach((lp) => {
@@ -168,7 +166,6 @@ export async function fetchProducts(): Promise<Product[]> {
     });
 
     const processed: Product[] = (data || []).map((p: any) => {
-      // Prioritize database image_url or image column
       const dbImg = p.image_url || p.image || null;
       const cachedImg = localMap[p.id] || null;
       const chosenImg = (dbImg && !dbImg.startsWith('blob:')) 
@@ -181,7 +178,6 @@ export async function fetchProducts(): Promise<Product[]> {
         ? p.variants_json
         : (localVariantMap[p.id] || []);
 
-      // Auto-reconcile / repair stock with excessive decimals directly in database
       if (typeof p.stock_kg === 'number' && p.stock_kg !== roundedStock) {
         supabase.from('products').update({ stock_kg: roundedStock }).eq('id', p.id).then();
       }
@@ -536,6 +532,23 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
   };
 
   const cachedSales = getLocalSales();
+  // 0. Update stok produk di local cache segera agar instan dan konsisten
+  const localProducts = getLocalProducts();
+  const updatedLocalProducts = localProducts.map((p) => {
+    const boughtItem = payload.items.find((it) => String(it.product.id) === String(p.id));
+    if (boughtItem) {
+      const itemUnit = boughtItem.unit || p.unit;
+      const currentVal = typeof p.stock_kg === 'number' ? p.stock_kg : Number(p.stock_kg) || 0;
+      const deducted = roundStock(Math.max(0, currentVal - boughtItem.qty), itemUnit);
+      return {
+        ...p,
+        stock_kg: deducted,
+      };
+    }
+    return p;
+  });
+  saveLocalProducts(updatedLocalProducts);
+
   saveLocalSales([localSale, ...cachedSales]);
 
   let finalSale = localSale;
@@ -592,18 +605,40 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
       const updatedList = getLocalSales().map((s) => (s.id === tempSaleId ? finalSale : s));
       saveLocalSales(updatedList);
 
+      // Pengurangan stok real-time langsung ke tabel products di Supabase
       for (const item of payload.items) {
         try {
           const itemUnit = item.unit || item.product.unit;
-          const newStock = roundStock(Math.max(0, (item.product.stock_kg || 0) - item.qty), itemUnit);
-          await supabase
+          const { data: currentProd } = await supabase
+            .from('products')
+            .select('stock_kg, unit')
+            .eq('id', item.product.id)
+            .single();
+
+          const currentStock = currentProd && typeof currentProd.stock_kg === 'number'
+            ? currentProd.stock_kg
+            : (Number(item.product.stock_kg) || 0);
+
+          const newStock = roundStock(Math.max(0, currentStock - item.qty), itemUnit || currentProd?.unit);
+          
+          const { error: updateErr } = await supabase
             .from('products')
             .update({ stock_kg: newStock })
             .eq('id', item.product.id);
+
+          if (updateErr) {
+            console.warn('Error updating Supabase stock for product:', item.product.id, updateErr.message);
+          }
         } catch (stockErr) {
           console.warn('Failed to update product stock for', item.product.name, stockErr);
         }
       }
+
+      // Refresh local products cache with live updated values
+      try {
+        const refreshedProducts = await fetchProducts();
+        saveLocalProducts(refreshedProducts);
+      } catch {}
 
       if (payload.payment_method === 'UTANG') {
         const debtPayload = {
@@ -898,7 +933,7 @@ export async function deleteSaleItem(
     if (existingSale) {
       const orderMatch = (existingSale.notes || '').match(/#ORD-(\d+)/i) || 
                          (existingSale.notes || '').match(/ORD-(\d+)/i) || 
-                         existingSale.id.match(/sale_online_(\\d+)/i);
+                         existingSale.id.match(/sale_online_(\d+)/i);
       if (orderMatch && orderMatch[1]) {
         try {
           const orderId = Number(orderMatch[1]);
