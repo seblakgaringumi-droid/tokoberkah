@@ -1,14 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Project Supabase Asli Toko Berkah (kquxfvcbgogjpthhsseg)
-export const DEFAULT_SUPABASE_URL = 'https://kquxfvcbgogjpthhsseg.supabase.co';
-export const DEFAULT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtxdXhmdmNiZ29nanB0aGhzc2VnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0MDI0OTEsImV4cCI6MjEwMTk3ODQ5MX0.xYs1LZHOYbNssk_6T0zpLzsXACjJxh4ksJnCMkUky9s';
+// Project Supabase Baru Toko Berkah (bjogkxquvqgikypjpmkz)
+export const DEFAULT_SUPABASE_URL = 'https://bjogkxquvqgikypjpmkz.supabase.co';
+export const DEFAULT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqb2dreHF1dnFnaWt5cGpwbWt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4NzkyMDgsImV4cCI6MjEwNjQ1NTIwOH0.RX8bmKXzG4vWAhw7c4TGxxuvRyXWYnYdwhIK5oMEg2s';
 
 export const getActiveSupabaseUrl = (): string => {
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('tokoberkah_supabase_url');
-    // Bersihkan sisa tunnel lama (raceroute / pinggy / akun baru uji coba)
-    if (!saved || saved.includes('raceroute') || saved.includes('pinggy') || saved.includes('claitrxfqezqdvvckloa')) {
+    // Bersihkan sisa URL lama (kquxfvcbgogjpthhsseg, claitrxfqezqdvvckloa, raceroute, pinggy)
+    if (
+      !saved ||
+      saved.includes('raceroute') ||
+      saved.includes('pinggy') ||
+      saved.includes('kquxfvcbgogjpthhsseg') ||
+      saved.includes('claitrxfqezqdvvckloa')
+    ) {
       localStorage.setItem('tokoberkah_supabase_url', DEFAULT_SUPABASE_URL);
       return DEFAULT_SUPABASE_URL;
     }
@@ -20,8 +26,14 @@ export const getActiveSupabaseUrl = (): string => {
 export const getActiveSupabaseAnonKey = (): string => {
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('tokoberkah_supabase_anon_key');
-    // Bersihkan key lama yang sudah expired
-    if (!saved || saved.length < 50 || saved.includes('TpvjA3fYOi4PGm9T72l7OG5Ey36ZFpLQgRch8R_8jVg') || saved.includes('Mq3e79VW-dAcxc9Xdcuy6sYgyQJdAAr2pWzU5sNfNdw')) {
+    // Bersihkan anon key lama yang kuotanya habis atau expired
+    if (
+      !saved ||
+      saved.length < 50 ||
+      saved.includes('xYs1LZHOYbNssk_6T0zpLzsXACjJxh4ksJnCMkUky9s') ||
+      saved.includes('TpvjA3fYOi4PGm9T72l7OG5Ey36ZFpLQgRch8R_8jVg') ||
+      saved.includes('Mq3e79VW-dAcxc9Xdcuy6sYgyQJdAAr2pWzU5sNfNdw')
+    ) {
       localStorage.setItem('tokoberkah_supabase_anon_key', DEFAULT_ANON_KEY);
       return DEFAULT_ANON_KEY;
     }
