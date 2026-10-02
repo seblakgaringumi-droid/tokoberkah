@@ -728,3 +728,12 @@ export async function syncCompletedOrdersToSales(): Promise<{ syncedCount: numbe
     return { syncedCount: 0, sales: getLocalSales() };
   }
 }
+export async function deleteExpense(id: string): Promise<void> {
+  try {
+    const { error } = await supabase.from('expenses').delete().eq('id', id);
+    if (error) throw error;
+  } catch (err) {
+    console.warn('Error deleting expense:', err);
+    throw err;
+  }
+}
