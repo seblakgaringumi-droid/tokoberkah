@@ -910,6 +910,105 @@ export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProf
   return cleanProfile;
 }
 
+// ==================== DEBTS & CREDITS HELPER ====================
+
+export interface UtangSyncInfo {
+  isUtang: boolean;
+  isLunas: boolean;
+  isPartial: boolean;
+  isUnpaid: boolean;
+  remainingAmount: number;
+  totalAmount: number;
+  matchingDebt?: DebtCredit | null;
+  statusBadge: {
+    label: string;
+    bg: string;
+    badgeText: string;
+  };
+}
+
+export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo {
+  const isUtang = (sale.payment_method || '').toUpperCase() === 'UTANG';
+  if (!isUtang) {
+    return {
+      isUtang: false,
+      isLunas: true,
+      isPartial: false,
+      isUnpaid: false,
+      remainingAmount: 0,
+      totalAmount: Number(sale.total_amount || 0),
+      matchingDebt: null,
+      statusBadge: {
+        label: 'Lunas',
+        bg: 'bg-emerald-50 text-[#1B5E20] border-emerald-200',
+        badgeText: 'LUNAS',
+      },
+    };
+  }
+
+  const allDebts = debts && debts.length > 0 ? debts : getLocalDebts();
+  const saleTag = sale.id ? sale.id.slice(0, 8).toLowerCase() : '';
+
+  const matchingDebt = allDebts.find((d) => {
+    if (!d) return false;
+    const notes = (d.notes || '').toLowerCase();
+    if (saleTag && notes.includes(saleTag)) return true;
+    if (sale.id && notes.includes(sale.id.toLowerCase())) return true;
+    if (sale.notes && d.id && sale.notes.toLowerCase().includes(d.id.toLowerCase())) return true;
+
+    const custName = (sale.customer_name || (sale.notes ? sale.notes.replace(/^Pelanggan:\s*/i, '') : '')).trim().toLowerCase();
+    if (
+      custName &&
+      d.customer_or_supplier_name &&
+      d.type === 'PIUTANG' &&
+      d.customer_or_supplier_name.trim().toLowerCase() === custName &&
+      Math.abs(Number(d.total_amount) - Number(sale.total_amount)) < 1
+    ) {
+      return true;
+    }
+    return false;
+  });
+
+  const saleStatus = (sale.status || '').toLowerCase();
+  const debtStatus = matchingDebt?.status ? matchingDebt.status.toLowerCase() : '';
+  const remaining = matchingDebt !== undefined && matchingDebt !== null
+    ? Number(matchingDebt.remaining_amount)
+    : (saleStatus === 'paid' ? 0 : Number(sale.total_amount || 0));
+
+  const isLunas = saleStatus === 'paid' || debtStatus === 'paid' || (matchingDebt !== undefined && matchingDebt !== null && remaining <= 0);
+  const isPartial = !isLunas && (saleStatus === 'partial' || debtStatus === 'partial' || (remaining > 0 && remaining < Number(sale.total_amount || 0)));
+  const isUnpaid = !isLunas && !isPartial;
+
+  let badgeLabel = 'Utang (Belum Lunas)';
+  let badgeBg = 'bg-amber-50 text-amber-800 border-amber-300';
+  let badgeText = 'BELUM LUNAS';
+
+  if (isLunas) {
+    badgeLabel = 'Utang (Lunas)';
+    badgeBg = 'bg-emerald-50 text-[#1B5E20] border-emerald-300';
+    badgeText = 'LUNAS';
+  } else if (isPartial) {
+    badgeLabel = 'Utang (Dicicil)';
+    badgeBg = 'bg-blue-50 text-blue-800 border-blue-200';
+    badgeText = 'DICICIL';
+  }
+
+  return {
+    isUtang: true,
+    isLunas,
+    isPartial,
+    isUnpaid,
+    remainingAmount: isLunas ? 0 : Math.max(0, remaining),
+    totalAmount: Number(sale.total_amount || 0),
+    matchingDebt: matchingDebt || null,
+    statusBadge: {
+      label: badgeLabel,
+      bg: badgeBg,
+      badgeText,
+    },
+  };
+}
+
 // ==================== INITIAL DATA SEEDER ====================
 
 export async function seedInitialProductsIfEmpty(): Promise<boolean> {
