@@ -737,3 +737,14 @@ export async function deleteExpense(id: string): Promise<void> {
     throw err;
   }
 }
+export async function fetchDebtPayments(): Promise<DebtPayment[]> {
+  try {
+    const { data, error } = await supabase.from('debt_payments').select('*').order('created_at', { ascending: false });
+    if (error) return getLocalDebtPayments();
+    const list = (data || []).filter(Boolean);
+    saveLocalDebtPayments(list);
+    return list;
+  } catch {
+    return getLocalDebtPayments();
+  }
+}
