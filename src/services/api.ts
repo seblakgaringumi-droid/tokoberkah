@@ -92,354 +92,6 @@ function getLocalWallet(): StoreWallet {
   }
 }
 
-function saveLocalWallet(wallet: StoreWallet) {
-  try {
-    localStorage.setItem(WALLET_CACHE_KEY, JSON.stringify(wallet));
-  } catch (e) {
-    console.warn('Local storage save wallet note:', e);
-  }
-}
-
-function getLocalExpenses(): Expense[] {
-  try {
-    const raw = localStorage.getItem(EXPENSES_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalExpenses(expenses: Expense[]) {
-  try {
-    localStorage.setItem(EXPENSES_CACHE_KEY, JSON.stringify(expenses));
-  } catch (e) {
-    console.warn('Local storage save expenses note:', e);
-  }
-}
-
-function getLocalOrders(): Order[] {
-  try {
-    const raw = localStorage.getItem(ORDERS_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalOrders(orders: Order[]) {
-  try {
-    localStorage.setItem(ORDERS_CACHE_KEY, JSON.stringify(orders));
-  } catch (e) {
-    console.warn('Local storage save orders note:', e);
-  }
-}
-
-// ==================== PRODUCTS ====================
-
-export async function fetchProducts(): Promise<Product[]> {
-  const localMap = getLocalImageMap();
-  try {
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .order('name', { ascending: true });
-
-    if (error) {
-      console.warn('Supabase fetch products returned error, using local cache:', error.message);
-      const cached = getLocalProducts();
-      if (cached.length > 0) {
-        return cached.map((p) => {
-          let rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
-          if (rawImg && rawImg.includes('kquxfvcbgogjpthhsseg')) {
-            rawImg = rawImg.replace('kquxfvcbgogjpthhsseg.supabase.co', 'bjogkxquvqgikypjpmkz.supabase.co');
-          }
-          if (rawImg && rawImg.includes(' ') && !rawImg.includes('%20')) {
-            const urlParts = rawImg.split('/products/');
-            if (urlParts.length === 2) {
-              rawImg = `${urlParts[0]}/products/${encodeURIComponent(urlParts[1])}`;
-            }
-          }
-          const validImg = rawImg && !rawImg.startsWith('blob:') ? rawImg : null;
-          return { ...p, image_url: validImg };
-        });
-      }
-      return [];
-    }
-
-    const existingLocal = getLocalProducts();
-    const localVariantMap: Record<string, any> = {};
-    existingLocal.forEach((lp) => {
-      if (lp.variants_json && (Array.isArray(lp.variants_json) ? lp.variants_json.length > 0 : true)) {
-        localVariantMap[lp.id] = lp.variants_json;
-      }
-    });
-
-    const processed: Product[] = (data || []).map((p: any) => {
-      const dbImg = p.image_url || p.image || null;
-      const cachedImg = localMap[p.id] || null;
-      let chosenImg = (dbImg && !dbImg.startsWith('blob:')) 
-        ? dbImg 
-        : (cachedImg && !cachedImg.startsWith('blob:') ? cachedImg : null);
-
-      if (chosenImg && chosenImg.includes('kquxfvcbgogjpthhsseg')) {
-        chosenImg = chosenImg.replace('kquxfvcbgogjpthhsseg.supabase.co', 'bjogkxquvqgikypjpmkz.supabase.co');
-      }
-      if (chosenImg && chosenImg.includes(' ') && !chosenImg.includes('%20')) {
-        const urlParts = chosenImg.split('/products/');
-        if (urlParts.length === 2) {
-          chosenImg = `${urlParts[0]}/products/${encodeURIComponent(urlParts[1])}`;
-        }
-      }
-
-      const roundedStock = typeof p.stock_kg === 'number' ? roundStock(p.stock_kg, p.unit) : p.stock_kg;
-      const roundedMinStock = typeof p.min_stock === 'number' ? roundStock(p.min_stock, p.unit) : p.min_stock;
-      const variants = (p.variants_json !== undefined && p.variants_json !== null)
-        ? p.variants_json
-        : (localVariantMap[p.id] || []);
-
-      if (typeof p.stock_kg === 'number' && p.stock_kg !== roundedStock) {
-        supabase.from('products').update({ stock_kg: roundedStock }).eq('id', p.id).then();
-      }
-
-      return {
-        ...p,
-        image_url: chosenImg,
-        stock_kg: roundedStock,
-        min_stock: roundedMinStock,
-        variants_json: variants,
-      };
-    });
-
-    saveLocalProducts(processed);
-    return processed;
-  } catch (err: any) {
-    console.warn('fetchProducts network/fetch exception, falling back to cache:', err);
-    const cached = getLocalProducts();
-    if (cached.length > 0) {
-      return cached.map((p) => {
-        let rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
-        if (rawImg && rawImg.includes('kquxfvcbgogjpthhsseg')) {
-          rawImg = rawImg.replace('kquxfvcbgogjpthhsseg.supabase.co', 'bjogkxquvqgikypjpmkz.supabase.co');
-        }
-        if (rawImg && rawImg.includes(' ') && !rawImg.includes('%20')) {
-          const urlParts = rawImg.split('/products/');
-          if (urlParts.length === 2) {
-            rawImg = `${urlParts[0]}/products/${encodeURIComponent(urlParts[1])}`;
-          }
-        }
-        const validImg = rawImg && !rawImg.startsWith('blob:') ? rawImg : null;
-        return {
-          ...p,
-          image_url: validImg,
-        };
-      });
-    }
-    return [];
-  }
-}
-
-export async function createProduct(product: Omit<Product, 'id'>): Promise<Product> {
-  const cleanImageUrl = product.image_url && !product.image_url.startsWith('blob:') ? product.image_url : null;
-  const cleanPayload = {
-    ...product,
-    image_url: cleanImageUrl,
-    stock_kg: roundStock(Number(product.stock_kg) || 0, product.unit),
-    min_stock: roundStock(Number(product.min_stock) || 0, product.unit),
-  };
-
-  const tempId = `prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const localProduct: Product = {
-    id: tempId,
-    ...cleanPayload,
-    image_url: cleanImageUrl,
-  };
-
-  if (cleanImageUrl) {
-    saveLocalImage(tempId, cleanImageUrl);
-  }
-
-  const localList = getLocalProducts();
-  saveLocalProducts([localProduct, ...localList]);
-
-  try {
-    const { data, error } = await supabase
-      .from('products')
-      .insert([cleanPayload])
-      .select()
-      .single();
-
-    if (error) {
-      console.warn('Supabase insert note, checking column fallback:', error.message);
-      if (error.message && (error.message.includes('variants_json') || error.message.includes('column'))) {
-        const withoutVariants = { ...cleanPayload };
-        delete (withoutVariants as any).variants_json;
-        const { data: retryData2, error: retryError2 } = await supabase
-          .from('products')
-          .insert([withoutVariants])
-          .select()
-          .single();
-        if (!retryError2 && retryData2) {
-          const finalImg = retryData2.image_url || retryData2.image || cleanImageUrl;
-          return { ...retryData2, image_url: finalImg, variants_json: cleanPayload.variants_json };
-        }
-      }
-      if (cleanImageUrl) {
-        const withAlternativeColumn = { ...cleanPayload, image: cleanImageUrl } as any;
-        delete withAlternativeColumn.image_url;
-        const { data: retryData, error: retryError } = await supabase
-          .from('products')
-          .insert([withAlternativeColumn])
-          .select()
-          .single();
-        if (!retryError && retryData) {
-          saveLocalImage(retryData.id, cleanImageUrl);
-          return { ...retryData, image_url: cleanImageUrl };
-        }
-      }
-      return localProduct;
-    }
-
-    const finalImageUrl = data.image_url || (data as any).image || cleanImageUrl;
-    if (finalImageUrl) {
-      saveLocalImage(data.id, finalImageUrl);
-    }
-    return { ...data, image_url: finalImageUrl };
-  } catch (err) {
-    console.warn('createProduct fetch exception, returned local product:', err);
-    return localProduct;
-  }
-}
-
-export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product> {
-  const cleanUpdates = { ...updates };
-  if (cleanUpdates.stock_kg !== undefined) {
-    cleanUpdates.stock_kg = roundStock(Number(cleanUpdates.stock_kg) || 0, cleanUpdates.unit);
-  }
-  if (cleanUpdates.min_stock !== undefined) {
-    cleanUpdates.min_stock = roundStock(Number(cleanUpdates.min_stock) || 0, cleanUpdates.unit);
-  }
-
-  if ('image_url' in cleanUpdates) {
-    if (cleanUpdates.image_url && cleanUpdates.image_url.startsWith('blob:')) {
-      cleanUpdates.image_url = null;
-    }
-    saveLocalImage(id, cleanUpdates.image_url || null);
-  }
-
-  const localList = getLocalProducts();
-  const idx = localList.findIndex((p) => String(p.id) === String(id));
-  let updatedLocal: Product;
-  if (idx >= 0) {
-    updatedLocal = { ...localList[idx], ...cleanUpdates };
-    localList[idx] = updatedLocal;
-    saveLocalProducts(localList);
-  } else {
-    updatedLocal = { id, ...cleanUpdates } as Product;
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('products')
-      .update(cleanUpdates)
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      console.warn('Supabase update note, checking image column fallback:', error.message);
-      if (error.message && (error.message.includes('variants_json') || error.message.includes('column'))) {
-        const withoutVariants = { ...cleanUpdates };
-        delete (withoutVariants as any).variants_json;
-        const { data: retryData2, error: retryError2 } = await supabase
-          .from('products')
-          .update(withoutVariants)
-          .eq('id', id)
-          .select()
-          .single();
-        if (!retryError2 && retryData2) {
-          const finalImg = retryData2.image_url || retryData2.image || cleanUpdates.image_url || null;
-          return { ...retryData2, image_url: finalImg, variants_json: cleanUpdates.variants_json };
-        }
-      }
-      if ('image_url' in cleanUpdates) {
-        const withAlternativeColumn = { ...cleanUpdates, image: cleanUpdates.image_url } as any;
-        delete withAlternativeColumn.image_url;
-        const { data: retryData, error: retryError } = await supabase
-          .from('products')
-          .update(withAlternativeColumn)
-          .eq('id', id)
-          .select()
-          .single();
-        if (!retryError && retryData) {
-          const finalImg = retryData.image_url || retryData.image || cleanUpdates.image_url || null;
-          saveLocalImage(id, finalImg);
-          return { ...retryData, image_url: finalImg };
-        }
-      }
-      return updatedLocal;
-    }
-
-    const finalImg = data.image_url || (data as any).image || cleanUpdates.image_url || null;
-    if (finalImg) {
-      saveLocalImage(data.id, finalImg);
-    }
-    return {
-      ...data,
-      image_url: finalImg,
-    };
-  } catch (err) {
-    console.warn('updateProduct fetch error, preserved in local cache:', err);
-    return updatedLocal;
-  }
-}
-
-export async function deleteProduct(id: string): Promise<void> {
-  const localList = getLocalProducts().filter((p) => String(p.id) !== String(id));
-  saveLocalProducts(localList);
-  saveLocalImage(id, null);
-
-  try {
-    const { error } = await supabase
-      .from('products')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      console.warn('Supabase delete product note:', error.message);
-    }
-  } catch (err) {
-    console.warn('deleteProduct fetch note:', err);
-  }
-}
-
-export async function adjustProductStock(id: string, deltaStock: number): Promise<void> {
-  const localList = getLocalProducts();
-  const idx = localList.findIndex((p) => String(p.id) === String(id));
-  const productUnit = idx >= 0 ? localList[idx].unit : undefined;
-  if (idx >= 0) {
-    localList[idx].stock_kg = roundStock(Math.max(0, (localList[idx].stock_kg || 0) + deltaStock), productUnit);
-    saveLocalProducts(localList);
-  }
-
-  try {
-    const { data: current, error: fetchErr } = await supabase
-      .from('products')
-      .select('stock_kg, unit')
-      .eq('id', id)
-      .single();
-
-    if (!fetchErr && current) {
-      const newStock = roundStock(Math.max(0, Number(current.stock_kg || 0) + deltaStock), current.unit || productUnit);
-      await supabase
-        .from('products')
-        .update({ stock_kg: newStock })
-        .eq('id', id);
-    }
-  } catch (err) {
-    console.warn('adjustProductStock note:', err);
-  }
-}
-
 function getLocalSales(): Sale[] {
   try {
     const raw = localStorage.getItem(SALES_CACHE_KEY);
@@ -508,7 +160,139 @@ export function saveLocalCashFlow(entries: CashFlowEntry[]) {
   }
 }
 
-// ==================== SALES & SALE ITEMS ====================
+function getLocalOrders(): Order[] {
+  try {
+    const raw = localStorage.getItem(ORDERS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalOrders(orders: Order[]) {
+  try {
+    localStorage.setItem(ORDERS_CACHE_KEY, JSON.stringify(orders));
+  } catch (e) {
+    console.warn('Local storage save orders note:', e);
+  }
+}
+
+// ==================== PRODUCTS ====================
+
+export async function fetchProducts(): Promise<Product[]> {
+  const localMap = getLocalImageMap();
+  try {
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) {
+      const cached = getLocalProducts();
+      return cached;
+    }
+
+    const processed: Product[] = (data || []).map((p: any) => {
+      const dbImg = p.image_url || p.image || null;
+      const cachedImg = localMap[p.id] || null;
+      let chosenImg = (dbImg && !dbImg.startsWith('blob:')) ? dbImg : (cachedImg && !cachedImg.startsWith('blob:') ? cachedImg : null);
+
+      if (chosenImg && chosenImg.includes('kquxfvcbgogjpthhsseg')) {
+        chosenImg = chosenImg.replace('kquxfvcbgogjpthhsseg.supabase.co', 'bjogkxquvqgikypjpmkz.supabase.co');
+      }
+      if (chosenImg && chosenImg.includes(' ') && !chosenImg.includes('%20')) {
+        const urlParts = chosenImg.split('/products/');
+        if (urlParts.length === 2) {
+          chosenImg = `${urlParts[0]}/products/${encodeURIComponent(urlParts[1])}`;
+        }
+      }
+
+      return {
+        ...p,
+        image_url: chosenImg,
+        stock_kg: typeof p.stock_kg === 'number' ? roundStock(p.stock_kg, p.unit) : p.stock_kg,
+        min_stock: typeof p.min_stock === 'number' ? roundStock(p.min_stock, p.unit) : p.min_stock,
+      };
+    });
+
+    saveLocalProducts(processed);
+    return processed;
+  } catch {
+    return getLocalProducts();
+  }
+}
+
+export async function createProduct(product: Omit<Product, 'id'>): Promise<Product> {
+  const cleanImageUrl = product.image_url && !product.image_url.startsWith('blob:') ? product.image_url : null;
+  const cleanPayload = {
+    ...product,
+    image_url: cleanImageUrl,
+    stock_kg: roundStock(Number(product.stock_kg) || 0, product.unit),
+    min_stock: roundStock(Number(product.min_stock) || 0, product.unit),
+  };
+
+  const tempId = `prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const localProduct: Product = { id: tempId, ...cleanPayload, image_url: cleanImageUrl };
+  if (cleanImageUrl) saveLocalImage(tempId, cleanImageUrl);
+  saveLocalProducts([localProduct, ...getLocalProducts()]);
+
+  try {
+    const { data, error } = await supabase.from('products').insert([cleanPayload]).select().single();
+    if (error) return localProduct;
+    if (data.image_url) saveLocalImage(data.id, data.image_url);
+    return data;
+  } catch {
+    return localProduct;
+  }
+}
+
+export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product> {
+  const cleanUpdates = { ...updates };
+  if (cleanUpdates.stock_kg !== undefined) cleanUpdates.stock_kg = roundStock(Number(cleanUpdates.stock_kg) || 0, cleanUpdates.unit);
+  if (cleanUpdates.min_stock !== undefined) cleanUpdates.min_stock = roundStock(Number(cleanUpdates.min_stock) || 0, cleanUpdates.unit);
+
+  if ('image_url' in cleanUpdates) {
+    if (cleanUpdates.image_url?.startsWith('blob:')) cleanUpdates.image_url = null;
+    saveLocalImage(id, cleanUpdates.image_url || null);
+  }
+
+  const localList = getLocalProducts();
+  const idx = localList.findIndex((p) => String(p.id) === String(id));
+  let updatedLocal: Product = idx >= 0 ? { ...localList[idx], ...cleanUpdates } : { id, ...updates } as Product;
+  if (idx >= 0) { localList[idx] = updatedLocal; saveLocalProducts(localList); }
+
+  try {
+    const { data, error } = await supabase.from('products').update(cleanUpdates).eq('id', id).select().single();
+    if (error) return updatedLocal;
+    return data;
+  } catch {
+    return updatedLocal;
+  }
+}
+
+export async function deleteProduct(id: string): Promise<void> {
+  saveLocalProducts(getLocalProducts().filter((p) => String(p.id) !== String(id)));
+  saveLocalImage(id, null);
+  try { await supabase.from('products').delete().eq('id', id); } catch {}
+}
+
+export async function adjustProductStock(id: string, deltaStock: number): Promise<void> {
+  const localList = getLocalProducts();
+  const idx = localList.findIndex((p) => String(p.id) === String(id));
+  if (idx >= 0) {
+    localList[idx].stock_kg = roundStock(Math.max(0, (localList[idx].stock_kg || 0) + deltaStock), localList[idx].unit);
+    saveLocalProducts(localList);
+  }
+  try {
+    const { data } = await supabase.from('products').select('stock_kg, unit').eq('id', id).single();
+    if (data) {
+      const newStock = roundStock(Math.max(0, Number(data.stock_kg || 0) + deltaStock), data.unit);
+      await supabase.from('products').update({ stock_kg: newStock }).eq('id', id);
+    }
+  } catch {}
+}
+
+// ==================== SALES ====================
 
 export interface CheckoutPayload {
   total_amount: number;
@@ -518,28 +302,18 @@ export interface CheckoutPayload {
   customer_phone?: string;
   cash_received?: number;
   change_amount?: number;
-  items: {
-    product: Product;
-    qty: number;
-    unit: string;
-    subtotal: number;
-  }[];
+  items: { product: Product; qty: number; unit: string; subtotal: number }[];
   debt_due_date?: string;
 }
 
 export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sale; items: SaleItem[] }> {
-  const generatedUuid = typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0;
-        const v = c === 'x' ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-      });
-  const tempSaleId = generatedUuid;
-  
+  const generatedUuid = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+
   const constructedItems: SaleItem[] = payload.items.map((item, idx) => ({
     id: `item_${Date.now()}_${idx}`,
-    sale_id: tempSaleId,
+    sale_id: generatedUuid,
     product_id: item.product.id,
     qty_kg: item.qty,
     qty: item.qty,
@@ -552,7 +326,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
   }));
 
   const localSale: Sale = {
-    id: tempSaleId,
+    id: generatedUuid,
     total_amount: payload.total_amount,
     payment_method: payload.payment_method,
     status: payload.payment_method === 'UTANG' ? 'unpaid' : 'paid',
@@ -566,138 +340,40 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
     customer_phone: payload.customer_phone,
   };
 
-  const cachedSales = getLocalSales();
-  const localProducts = getLocalProducts();
-  const updatedLocalProducts = localProducts.map((p) => {
-    const boughtItem = payload.items.find((it) => String(it.product.id) === String(p.id));
-    if (boughtItem) {
-      const itemUnit = boughtItem.unit || p.unit;
-      const currentVal = typeof p.stock_kg === 'number' ? p.stock_kg : Number(p.stock_kg) || 0;
-      const deducted = roundStock(Math.max(0, currentVal - boughtItem.qty), itemUnit);
-      return {
-        ...p,
-        stock_kg: deducted,
-      };
-    }
-    return p;
-  });
-  saveLocalProducts(updatedLocalProducts);
-
-  saveLocalSales([localSale, ...cachedSales]);
-
-  let finalSale = localSale;
-  let finalItems = constructedItems;
+  saveLocalSales([localSale, ...getLocalSales()]);
 
   try {
-    const { data: saleData, error: saleError } = await supabase
-      .from('sales')
-      .insert([{
-        id: generatedUuid,
-        total_amount: payload.total_amount,
-        payment_method: payload.payment_method,
-        status: payload.payment_method === 'UTANG' ? 'unpaid' : 'paid',
-        notes: payload.notes || (payload.customer_name ? `Pelanggan: ${payload.customer_name}` : null),
-      }])
-      .select()
-      .single();
+    await supabase.from('sales').insert([{
+      id: generatedUuid,
+      total_amount: payload.total_amount,
+      payment_method: payload.payment_method,
+      status: payload.payment_method === 'UTANG' ? 'unpaid' : 'paid',
+      notes: localSale.notes,
+    }]);
 
-    if (!saleError && saleData) {
-      finalSale = {
-        ...saleData,
-        items: constructedItems,
-        sale_items: constructedItems,
-        cash_received: payload.cash_received,
-        change_amount: payload.change_amount,
-        customer_name: payload.customer_name,
-      };
+    const saleItemsPayload = payload.items.map(item => ({
+      sale_id: generatedUuid,
+      product_id: item.product.id,
+      qty_kg: item.qty,
+      subtotal: item.subtotal,
+      cost_price: item.product.cost_price || 0,
+      original_qty: item.qty,
+      unit: item.unit || item.product.unit || 'kg',
+      custom_subtotal: item.subtotal,
+    }));
 
-      const saleItemsPayload = payload.items.map(item => ({
-        sale_id: saleData.id,
-        product_id: item.product.id,
-        qty_kg: item.qty,
-        subtotal: item.subtotal,
-        cost_price: item.product.cost_price || 0,
-        original_qty: item.qty,
-        unit: item.unit || item.product.unit || 'kg',
-        custom_subtotal: item.subtotal,
-      }));
+    await supabase.from('sale_items').insert(saleItemsPayload);
 
-      const { data: insertedItems } = await supabase
-        .from('sale_items')
-        .insert(saleItemsPayload)
-        .select();
-
-      if (insertedItems && insertedItems.length > 0) {
-        finalItems = insertedItems.map((ins, idx) => ({
-          ...ins,
-          qty: ins.qty_kg || ins.original_qty || payload.items[idx]?.qty || 1,
-          product: payload.items[idx]?.product,
-        }));
-        finalSale.items = finalItems;
-        finalSale.sale_items = finalItems;
-      }
-
-      const updatedList = getLocalSales().map((s) => (s.id === tempSaleId ? finalSale : s));
-      saveLocalSales(updatedList);
-
-      for (const item of payload.items) {
-        try {
-          const itemUnit = item.unit || item.product.unit;
-          const { data: currentProd } = await supabase
-            .from('products')
-            .select('stock_kg, unit')
-            .eq('id', item.product.id)
-            .single();
-
-          const currentStock = currentProd && typeof currentProd.stock_kg === 'number'
-            ? currentProd.stock_kg
-            : (Number(item.product.stock_kg) || 0);
-
-          const newStock = roundStock(Math.max(0, currentStock - item.qty), itemUnit || currentProd?.unit);
-          
-          await supabase
-            .from('products')
-            .update({ stock_kg: newStock })
-            .eq('id', item.product.id);
-        } catch (stockErr) {
-          console.warn('Failed to update product stock for', item.product.name, stockErr);
-        }
-      }
-
-      try {
-        const refreshedProducts = await fetchProducts();
-        saveLocalProducts(refreshedProducts);
-      } catch {}
-
-      if (payload.payment_method === 'UTANG') {
-        const debtPayload = {
-          type: 'PIUTANG',
-          customer_or_supplier_name: payload.customer_name || 'Pelanggan Utang',
-          phone_number: payload.customer_phone || null,
-          total_amount: payload.total_amount,
-          remaining_amount: payload.total_amount,
-          status: 'unpaid' as const,
-          due_date: payload.debt_due_date || null,
-          notes: `Transaksi kasir ${saleData?.id ? saleData.id.slice(0, 8) : tempSaleId.slice(0, 8)}`,
-        };
-        try {
-          await createDebtCredit(debtPayload);
-        } catch (debtErr) {
-          console.warn('Failed to create remote debt record, fallback preserved locally:', debtErr);
-        }
+    for (const item of payload.items) {
+      const { data: cur } = await supabase.from('products').select('stock_kg, unit').eq('id', item.product.id).single();
+      if (cur) {
+        const newStock = roundStock(Math.max(0, Number(cur.stock_kg || 0) - item.qty), cur.unit);
+        await supabase.from('products').update({ stock_kg: newStock }).eq('id', item.product.id);
       }
     }
-  } catch (err) {
-    console.warn('processSale Supabase write exception, using local store:', err);
-  }
 
-  if (payload.payment_method === 'UTANG') {
-    const existingDebts = getLocalDebts();
-    const noteTag = (finalSale?.id || tempSaleId).slice(0, 8);
-    const alreadySaved = existingDebts.some((d) => d && d.notes?.includes(noteTag));
-    if (!alreadySaved) {
-      const fallbackDebt: DebtCredit = {
-        id: `debt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    if (payload.payment_method === 'UTANG') {
+      await createDebtCredit({
         type: 'PIUTANG',
         customer_or_supplier_name: payload.customer_name || 'Pelanggan Utang',
         phone_number: payload.customer_phone || null,
@@ -705,25 +381,14 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         remaining_amount: payload.total_amount,
         status: 'unpaid',
         due_date: payload.debt_due_date || null,
-        notes: `Transaksi kasir ${noteTag}`,
-        created_at: new Date().toISOString(),
-      };
-      saveLocalDebts([fallbackDebt, ...existingDebts]);
+        notes: `Transaksi kasir ${generatedUuid.slice(0, 8)}`,
+      });
     }
+  } catch (err) {
+    console.warn('processSale remote write note:', err);
   }
 
-  return {
-    sale: {
-      ...finalSale,
-      id: finalSale?.id || tempSaleId,
-      customer_name: finalSale?.customer_name || payload.customer_name || (payload.payment_method === 'UTANG' ? 'Pelanggan Utang' : undefined),
-      items: finalItems || constructedItems || [],
-      sale_items: finalItems || constructedItems || [],
-      total_amount: Number(finalSale?.total_amount ?? payload.total_amount ?? 0),
-      payment_method: finalSale?.payment_method || payload.payment_method || 'CASH',
-    },
-    items: finalItems || constructedItems || [],
-  };
+  return { sale: localSale, items: constructedItems };
 }
 
 export async function fetchSales(): Promise<Sale[]> {
@@ -733,406 +398,186 @@ export async function fetchSales(): Promise<Sale[]> {
   localProducts.forEach(p => { productMap[p.id] = p; });
 
   try {
-    const { data, error } = await supabase
-      .from('sales')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('sales').select('*').order('created_at', { ascending: false });
+    if (error || !data) return localCached.length > 0 ? localCached : [];
 
-    if (error || !data) {
-      console.warn('Fetch sales fallback to local cache:', error?.message);
-      return localCached.length > 0 ? localCached : [];
-    }
-
-    let allSaleItems: any[] = [];
-    try {
-      const { data: itemsData } = await supabase
-        .from('sale_items')
-        .select('*');
-      allSaleItems = itemsData || [];
-    } catch (itErr) {
-      console.warn('Error fetching sale_items list:', itErr);
-    }
+    const { data: itemsData } = await supabase.from('sale_items').select('*');
+    const allSaleItems = itemsData || [];
 
     const itemsBySaleId: Record<string, SaleItem[]> = {};
     for (const it of allSaleItems) {
       if (!itemsBySaleId[it.sale_id]) itemsBySaleId[it.sale_id] = [];
       const prod = productMap[it.product_id] || {
-        id: it.product_id,
-        name: 'Produk Kasir',
-        category: 'Sembako',
+        id: it.product_id, name: 'Produk Kasir', category: 'Sembako',
         selling_price: it.subtotal && it.qty_kg ? it.subtotal / it.qty_kg : 0,
-        cost_price: it.cost_price || 0,
-        stock_kg: 0,
-        min_stock: 0,
-        is_active: true,
-        image_url: null,
-        unit: it.unit || 'pcs',
-        barcode: null
+        cost_price: it.cost_price || 0, stock_kg: 0, min_stock: 0, is_active: true, image_url: null, unit: it.unit || 'pcs'
       };
-
       itemsBySaleId[it.sale_id].push({
-        id: it.id,
-        sale_id: it.sale_id,
-        product_id: it.product_id,
-        qty_kg: Number(it.qty_kg) || Number(it.original_qty) || 1,
-        subtotal: Number(it.subtotal) || 0,
-        cost_price: Number(it.cost_price) || 0,
-        original_qty: Number(it.original_qty) || Number(it.qty_kg) || 1,
-        unit: it.unit || prod?.unit || 'kg',
-        product: prod,
+        id: it.id, sale_id: it.sale_id, product_id: it.product_id,
+        qty_kg: Number(it.qty_kg) || 1, subtotal: Number(it.subtotal) || 0,
+        cost_price: Number(it.cost_price) || 0, original_qty: Number(it.qty_kg) || 1,
+        unit: it.unit || prod.unit, product: prod
       });
     }
 
     const normalizedSales: Sale[] = data.map((sale: any) => {
       const cachedMatch = localCached.find(c => c.id === sale.id);
-      const items = itemsBySaleId[sale.id] || cachedMatch?.items || cachedMatch?.sale_items || [];
-
-      return {
-        ...sale,
-        items,
-        sale_items: items,
-        cash_received: cachedMatch?.cash_received,
-        change_amount: cachedMatch?.change_amount,
-        customer_name: cachedMatch?.customer_name,
-      };
+      const items = itemsBySaleId[sale.id] || cachedMatch?.items || [];
+      return { ...sale, items, sale_items: items, customer_name: cachedMatch?.customer_name };
     });
 
-    const cachedDebts = getLocalDebts();
-    const syncedSales = normalizedSales.map((s) => {
-      if ((s.payment_method || '').toUpperCase() !== 'UTANG') return s;
-      const info = getSaleDebtInfo(s, cachedDebts);
-      const targetStatus = info.isLunas ? 'paid' : (info.isPartial ? 'partial' : 'unpaid');
-      return s.status !== targetStatus ? { ...s, status: targetStatus } : s;
-    });
-
-    saveLocalSales(syncedSales);
-    return syncedSales;
-  } catch (err) {
-    console.warn('fetchSales exception, fallback to local cache:', err);
+    saveLocalSales(normalizedSales);
+    return normalizedSales;
+  } catch {
     return localCached;
   }
-}
-
-export async function fetchSalesByDateRange(startDateISO: string, endDateISO: string): Promise<Sale[]> {
-  try {
-    const { data, error } = await supabase
-      .from('sales')
-      .select('*')
-      .gte('created_at', startDateISO)
-      .lte('created_at', endDateISO)
-      .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      return data as Sale[];
-    }
-  } catch (err) {
-    console.warn('fetchSalesByDateRange fallback to local cache filtering:', err);
-  }
-
-  const allSales = await fetchSales();
-  const start = new Date(startDateISO).getTime();
-  const end = new Date(endDateISO).getTime();
-  return allSales.filter(s => {
-    const t = new Date(s.created_at).getTime();
-    return t >= start && t <= end;
-  });
 }
 
 // ==================== EXPENSES ====================
 
 export async function fetchExpenses(): Promise<Expense[]> {
   try {
-    const { data, error } = await supabase
-      .from('expenses')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.warn('Error fetching expenses, using local cache:', error.message);
-      return [];
-    }
+    const { data, error } = await supabase.from('expenses').select('*').order('created_at', { ascending: false });
+    if (error) return [];
     return data || [];
-  } catch (err) {
-    console.warn('Network exception fetching expenses:', err);
-    return [];
-  }
+  } catch { return []; }
 }
 
 export async function createExpense(expense: { title: string; amount: number; category: string; source?: string }): Promise<Expense> {
-  const expenseToInsert: any = {
-    title: expense.title,
-    amount: expense.amount,
-    category: expense.category,
-    source: expense.source || 'LACI',
-  };
-
-  const { data, error } = await supabase
-    .from('expenses')
-    .insert([expenseToInsert])
-    .select()
-    .single();
-
-  if (error) {
-    if (error.message && (error.message.toLowerCase().includes('source') || error.message.toLowerCase().includes('column'))) {
-      const fallbackExpense = {
-        title: expense.title,
-        amount: expense.amount,
-        category: expense.source === 'KAS_BESAR' ? `${expense.category} (KAS BESAR)` : expense.category,
-      };
-      const { data: fbData, error: fbErr } = await supabase
-        .from('expenses')
-        .insert([fallbackExpense])
-        .select()
-        .single();
-      if (fbErr) throw fbErr;
-      return { ...fbData, source: expense.source || 'LACI' };
-    }
-    console.error('Error creating expense:', error);
-    throw error;
-  }
+  const { data, error } = await supabase.from('expenses').insert([{ ...expense, source: expense.source || 'LACI' }]).select().single();
+  if (error) throw error;
   return data;
 }
 
-// ==================== DEBTS & CREDITS HELPER ====================
-
-export interface UtangSyncInfo {
-  isUtang: boolean;
-  isLunas: boolean;
-  isPartial: boolean;
-  isUnpaid: boolean;
-  remainingAmount: number;
-  totalAmount: number;
-  matchingDebt?: DebtCredit | null;
-  statusBadge: {
-    label: string;
-    bg: string;
-    badgeText: string;
-  };
-}
+// ==================== DEBTS & CREDITS ====================
 
 export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo {
   const isUtang = (sale.payment_method || '').toUpperCase() === 'UTANG';
   if (!isUtang) {
     return {
-      isUtang: false,
-      isLunas: true,
-      isPartial: false,
-      isUnpaid: false,
-      remainingAmount: 0,
-      totalAmount: Number(sale.total_amount || 0),
-      matchingDebt: null,
-      statusBadge: {
-        label: 'Lunas',
-        bg: 'bg-emerald-50 text-[#1B5E20] border-emerald-200',
-        badgeText: 'LUNAS',
-      },
+      isUtang: false, isLunas: true, isPartial: false, isUnpaid: false, remainingAmount: 0, totalAmount: Number(sale.total_amount || 0), matchingDebt: null,
+      statusBadge: { label: 'Lunas', bg: 'bg-emerald-50 text-[#1B5E20] border-emerald-200', badgeText: 'LUNAS' }
     };
   }
-
   const allDebts = debts && debts.length > 0 ? debts : getLocalDebts();
   const saleTag = sale.id ? sale.id.slice(0, 8).toLowerCase() : '';
-
-  const matchingDebt = allDebts.find((d) => {
-    if (!d) return false;
-    const notes = (d.notes || '').toLowerCase();
-    if (saleTag && notes.includes(saleTag)) return true;
-    if (sale.id && notes.includes(sale.id.toLowerCase())) return true;
-    if (sale.notes && d.id && sale.notes.toLowerCase().includes(d.id.toLowerCase())) return true;
-
-    const custName = (sale.customer_name || (sale.notes ? sale.notes.replace(/^Pelanggan:\s*/i, '') : '')).trim().toLowerCase();
-    if (
-      custName &&
-      d.customer_or_supplier_name &&
-      d.type === 'PIUTANG' &&
-      d.customer_or_supplier_name.trim().toLowerCase() === custName &&
-      Math.abs(Number(d.total_amount) - Number(sale.total_amount)) < 1
-    ) {
-      return true;
-    }
-    return false;
-  });
-
-  const saleStatus = (sale.status || '').toLowerCase();
-  const debtStatus = matchingDebt?.status ? matchingDebt.status.toLowerCase() : '';
-  const remaining = matchingDebt !== undefined && matchingDebt !== null
-    ? Number(matchingDebt.remaining_amount)
-    : (saleStatus === 'paid' ? 0 : Number(sale.total_amount || 0));
-
-  const isLunas = saleStatus === 'paid' || debtStatus === 'paid' || (matchingDebt !== undefined && matchingDebt !== null && remaining <= 0);
-  const isPartial = !isLunas && (saleStatus === 'partial' || debtStatus === 'partial' || (remaining > 0 && remaining < Number(sale.total_amount || 0)));
-  const isUnpaid = !isLunas && !isPartial;
-
-  let badgeLabel = 'Utang (Belum Lunas)';
-  let badgeBg = 'bg-amber-50 text-amber-800 border-amber-300';
-  let badgeText = 'BELUM LUNAS';
-
-  if (isLunas) {
-    badgeLabel = 'Utang (Lunas)';
-    badgeBg = 'bg-emerald-50 text-[#1B5E20] border-emerald-300';
-    badgeText = 'LUNAS';
-  } else if (isPartial) {
-    badgeLabel = 'Utang (Dicicil)';
-    badgeBg = 'bg-blue-50 text-blue-800 border-blue-200';
-    badgeText = 'DICICIL';
-  }
+  const matchingDebt = allDebts.find(d => d && (d.notes || '').toLowerCase().includes(saleTag));
+  const remaining = matchingDebt ? Number(matchingDebt.remaining_amount) : Number(sale.total_amount || 0);
+  const isLunas = remaining <= 0;
 
   return {
-    isUtang: true,
-    isLunas,
-    isPartial,
-    isUnpaid,
-    remainingAmount: isLunas ? 0 : Math.max(0, remaining),
-    totalAmount: Number(sale.total_amount || 0),
-    matchingDebt: matchingDebt || null,
+    isUtang: true, isLunas, isPartial: !isLunas && remaining < Number(sale.total_amount || 0), isUnpaid: !isLunas && remaining === Number(sale.total_amount || 0),
+    remainingAmount: Math.max(0, remaining), totalAmount: Number(sale.total_amount || 0), matchingDebt: matchingDebt || null,
     statusBadge: {
-      label: badgeLabel,
-      bg: badgeBg,
-      badgeText,
-    },
+      label: isLunas ? 'Utang (Lunas)' : 'Utang (Belum Lunas)',
+      bg: isLunas ? 'bg-emerald-50 text-[#1B5E20] border-emerald-300' : 'bg-amber-50 text-amber-800 border-amber-300',
+      badgeText: isLunas ? 'LUNAS' : 'BELUM LUNAS'
+    }
   };
 }
 
-// ==================== STORE PROFILE & RECEIPT SETTINGS ====================
-
-export async function fetchStoreProfile(): Promise<StoreProfile> {
-  let cached: StoreProfile = DEFAULT_STORE_PROFILE;
+export async function fetchDebtsCredits(): Promise<DebtCredit[]> {
   try {
-    const raw = localStorage.getItem(STORE_PROFILE_CACHE_KEY);
-    if (raw) {
-      cached = { ...DEFAULT_STORE_PROFILE, ...JSON.parse(raw) };
-    }
-  } catch (e) {
-    console.warn('Error reading store profile cache:', e);
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('store_profile')
-      .select('*')
-      .limit(1)
-      .maybeSingle();
-
-    if (!error && data) {
-      const merged: StoreProfile = {
-        store_name: data.store_name || data.name || cached.store_name,
-        tagline: data.tagline || data.category || cached.tagline,
-        address: data.address || cached.address,
-        phone: data.phone || data.whatsapp || cached.phone,
-        footer_message: data.footer_message || cached.footer_message,
-        footer_policy: data.footer_policy || cached.footer_policy,
-        footer_quote: data.footer_quote || cached.footer_quote,
-      };
-      try {
-        localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(merged));
-      } catch {}
-      return merged;
-    }
-  } catch (err) {}
-
-  return cached;
+    const { data, error } = await supabase.from('debts_credits').select('*').order('created_at', { ascending: false });
+    if (error) return getLocalDebts();
+    const list = (data || []).filter(Boolean);
+    saveLocalDebts(list);
+    return list;
+  } catch { return getLocalDebts(); }
 }
 
-export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProfile> {
-  const cleanProfile: StoreProfile = {
-    store_name: profile.store_name?.trim() || DEFAULT_STORE_PROFILE.store_name,
-    tagline: profile.tagline?.trim() || DEFAULT_STORE_PROFILE.tagline,
-    address: profile.address?.trim() || DEFAULT_STORE_PROFILE.address,
-    phone: profile.phone?.trim() || DEFAULT_STORE_PROFILE.phone,
-    footer_message: profile.footer_message?.trim() || DEFAULT_STORE_PROFILE.footer_message,
-    footer_policy: profile.footer_policy?.trim() || DEFAULT_STORE_PROFILE.footer_policy,
-    footer_quote: profile.footer_quote?.trim() || DEFAULT_STORE_PROFILE.footer_quote,
+export async function createDebtCredit(debt: any): Promise<DebtCredit> {
+  const item = { id: `debt_${Date.now()}`, ...debt, created_at: new Date().toISOString() };
+  saveLocalDebts([item, ...getLocalDebts()]);
+  try {
+    const { data, error } = await supabase.from('debts_credits').insert([debt]).select().single();
+    if (!error && data) return data;
+  } catch {}
+  return item;
+}
+
+export async function payDebtCredit(id: string, paymentAmount: number): Promise<DebtCredit> {
+  const cached = getLocalDebts();
+  const cur = cached.find(d => d.id === id);
+  const rem = Math.max(0, (cur ? Number(cur.remaining_amount) : paymentAmount) - paymentAmount);
+  const updated = cached.map(d => d.id === id ? { ...d, remaining_amount: rem, status: rem <= 0 ? 'paid' : 'partial' as any } : d);
+  saveLocalDebts(updated);
+  try {
+    const { data } = await supabase.from('debts_credits').select('*').eq('id', id).single();
+    if (data) {
+      const dbRem = Math.max(0, Number(data.remaining_amount) - paymentAmount);
+      await supabase.from('debts_credits').update({ remaining_amount: dbRem, status: dbRem <= 0 ? 'paid' : 'partial' }).eq('id', id);
+    }
+  } catch {}
+  return cur ? { ...cur, remaining_amount: rem, status: rem <= 0 ? 'paid' : 'partial' } : ({} as DebtCredit);
+}
+
+export async function deleteDebtCredit(id: string): Promise<void> {
+  saveLocalDebts(getLocalDebts().filter(d => d.id !== id));
+  try { await supabase.from('debts_credits').delete().eq('id', id); } catch {}
+}
+
+export async function recordDebtPayment(payload: { debt_id: string; customer_name?: string; amount: number; payment_method: string; notes?: string | null }): Promise<DebtPayment> {
+  const dp: DebtPayment = {
+    id: `dp_${Date.now()}`, debt_id: payload.debt_id, customer_name: payload.customer_name || 'Pelanggan',
+    amount: Number(payload.amount), payment_method: payload.payment_method || 'TUNAI', type: 'INCOME_DEBT_PAYMENT',
+    created_at: new Date().toISOString(), notes: payload.notes || null
   };
-
-  try {
-    localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(cleanProfile));
-  } catch (e) {
-    console.warn('Failed to save store profile to localStorage:', e);
-  }
-
-  try {
-    await supabase
-      .from('store_profile')
-      .upsert({
-        id: 1,
-        ...cleanProfile,
-        updated_at: new Date().toISOString(),
-      });
-  } catch (err) {
-    console.info('Saved store profile locally (store_profile table optional in Supabase)');
-  }
-
-  return cleanProfile;
+  saveLocalDebtPayments([dp, ...getLocalDebtPayments()]);
+  await payDebtCredit(payload.debt_id, dp.amount);
+  try { await supabase.from('debt_payments').insert([dp]); } catch {}
+  return dp;
 }
 
-// ==================== INITIAL DATA SEEDER ====================
-
-export async function seedInitialProductsIfEmpty(): Promise<boolean> {
-  try {
-    const { data: existing, error } = await supabase.from('products').select('id').limit(1);
-    if (error) return false;
-    return existing && existing.length > 0;
-  } catch (err) {
-    return false;
-  }
-}
-// ==================== ORDERS (PESANAN ONLINE) ====================
+// ==================== ORDERS ====================
 
 export async function fetchOrders(): Promise<Order[]> {
   try {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.warn('Error fetching orders:', error.message);
-      return [];
-    }
+    const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+    if (error) return getLocalOrders();
+    saveLocalOrders(data || []);
     return data || [];
-  } catch (err) {
-    console.warn('Network exception fetching orders:', err);
-    return [];
-  }
+  } catch { return getLocalOrders(); }
 }
 
-export async function createOrder(order: Omit<Order, 'id' | 'created_at'>): Promise<Order> {
-  const { data, error } = await supabase
-    .from('orders')
-    .insert([order])
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Error creating order:', error);
-    throw error;
-  }
+export async function createOrder(order: any): Promise<Order> {
+  const { data, error } = await supabase.from('orders').insert([order]).select().single();
+  if (error) throw error;
   return data;
 }
 
-export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PROCESSED' | 'COMPLETED' | 'CANCELLED'): Promise<Order> {
-  let currentOrder: Order | null = null;
+export async function updateOrderStatus(orderId: number, status: any): Promise<Order> {
+  const { data, error } = await supabase.from('orders').update({ status }).eq('id', orderId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// ==================== STORE PROFILE ====================
+
+export async function fetchStoreProfile(): Promise<StoreProfile> {
   try {
-    const { data } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('id', orderId)
-      .single();
-    currentOrder = data;
-  } catch (fetchErr) {
-    console.warn('Error reading order before update:', fetchErr);
-  }
+    const { data } = await supabase.from('store_profile').select('*').limit(1).maybeSingle();
+    if (data) return { store_name: data.store_name, tagline: data.tagline, address: data.address, phone: data.phone, footer_message: data.footer_message, footer_policy: data.footer_policy, footer_quote: data.footer_quote };
+  } catch {}
+  return DEFAULT_STORE_PROFILE;
+}
 
-  const { data, error } = await supabase
-    .from('orders')
-    .update({ status })
-    .eq('id', orderId)
-    .select()
-    .single();
+export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProfile> {
+  try {
+    await supabase.from('store_profile').upsert({ id: 1, ...profile, updated_at: new Date().toISOString() });
+  } catch {}
+  return profile;
+}
 
-  if (error) {
-    console.error('Error updating order status in Supabase:', error);
-    throw error;
-  }
+export async function seedInitialProductsIfEmpty(): Promise<boolean> {
+  try {
+    const { data } = await supabase.from('products').select('id').limit(1);
+    return !!(data && data.length > 0);
+  } catch { return false; }
+}
 
-  return data || { ...currentOrder, id: orderId, status };
+export interface UtangSyncInfo {
+  isUtang: boolean; isLunas: boolean; isPartial: boolean; isUnpaid: boolean;
+  remainingAmount: number; totalAmount: number; matchingDebt?: DebtCredit | null;
+  statusBadge: { label: string; bg: string; badgeText: string };
 }
