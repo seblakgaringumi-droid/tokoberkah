@@ -838,76 +838,59 @@ export async function fetchSalesByDateRange(startDateISO: string, endDateISO: st
   });
 }
 
-// ==================== STORE PROFILE & RECEIPT SETTINGS ====================
+// ==================== EXPENSES ====================
 
-export async function fetchStoreProfile(): Promise<StoreProfile> {
-  let cached: StoreProfile = DEFAULT_STORE_PROFILE;
-  try {
-    const raw = localStorage.getItem(STORE_PROFILE_CACHE_KEY);
-    if (raw) {
-      cached = { ...DEFAULT_STORE_PROFILE, ...JSON.parse(raw) };
-    }
-  } catch (e) {
-    console.warn('Error reading store profile cache:', e);
-  }
-
+export async function fetchExpenses(): Promise<Expense[]> {
   try {
     const { data, error } = await supabase
-      .from('store_profile')
+      .from('expenses')
       .select('*')
-      .limit(1)
-      .maybeSingle();
+      .order('created_at', { ascending: false });
 
-    if (!error && data) {
-      const merged: StoreProfile = {
-        store_name: data.store_name || data.name || cached.store_name,
-        tagline: data.tagline || data.category || cached.tagline,
-        address: data.address || cached.address,
-        phone: data.phone || data.whatsapp || cached.phone,
-        footer_message: data.footer_message || cached.footer_message,
-        footer_policy: data.footer_policy || cached.footer_policy,
-        footer_quote: data.footer_quote || cached.footer_quote,
-      };
-      try {
-        localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(merged));
-      } catch {}
-      return merged;
+    if (error) {
+      console.warn('Error fetching expenses, using local cache:', error.message);
+      return [];
     }
-  } catch (err) {}
-
-  return cached;
+    return data || [];
+  } catch (err) {
+    console.warn('Network exception fetching expenses:', err);
+    return [];
+  }
 }
 
-export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProfile> {
-  const cleanProfile: StoreProfile = {
-    store_name: profile.store_name?.trim() || DEFAULT_STORE_PROFILE.store_name,
-    tagline: profile.tagline?.trim() || DEFAULT_STORE_PROFILE.tagline,
-    address: profile.address?.trim() || DEFAULT_STORE_PROFILE.address,
-    phone: profile.phone?.trim() || DEFAULT_STORE_PROFILE.phone,
-    footer_message: profile.footer_message?.trim() || DEFAULT_STORE_PROFILE.footer_message,
-    footer_policy: profile.footer_policy?.trim() || DEFAULT_STORE_PROFILE.footer_policy,
-    footer_quote: profile.footer_quote?.trim() || DEFAULT_STORE_PROFILE.footer_quote,
+export async function createExpense(expense: { title: string; amount: number; category: string; source?: string }): Promise<Expense> {
+  const expenseToInsert: any = {
+    title: expense.title,
+    amount: expense.amount,
+    category: expense.category,
+    source: expense.source || 'LACI',
   };
 
-  try {
-    localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(cleanProfile));
-  } catch (e) {
-    console.warn('Failed to save store profile to localStorage:', e);
-  }
+  const { data, error } = await supabase
+    .from('expenses')
+    .insert([expenseToInsert])
+    .select()
+    .single();
 
-  try {
-    await supabase
-      .from('store_profile')
-      .upsert({
-        id: 1,
-        ...cleanProfile,
-        updated_at: new Date().toISOString(),
-      });
-  } catch (err) {
-    console.info('Saved store profile locally (store_profile table optional in Supabase)');
+  if (error) {
+    if (error.message && (error.message.toLowerCase().includes('source') || error.message.toLowerCase().includes('column'))) {
+      const fallbackExpense = {
+        title: expense.title,
+        amount: expense.amount,
+        category: expense.source === 'KAS_BESAR' ? `${expense.category} (KAS BESAR)` : expense.category,
+      };
+      const { data: fbData, error: fbErr } = await supabase
+        .from('expenses')
+        .insert([fallbackExpense])
+        .select()
+        .single();
+      if (fbErr) throw fbErr;
+      return { ...fbData, source: expense.source || 'LACI' };
+    }
+    console.error('Error creating expense:', error);
+    throw error;
   }
-
-  return cleanProfile;
+  return data;
 }
 
 // ==================== DEBTS & CREDITS HELPER ====================
@@ -1007,6 +990,78 @@ export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo
       badgeText,
     },
   };
+}
+
+// ==================== STORE PROFILE & RECEIPT SETTINGS ====================
+
+export async function fetchStoreProfile(): Promise<StoreProfile> {
+  let cached: StoreProfile = DEFAULT_STORE_PROFILE;
+  try {
+    const raw = localStorage.getItem(STORE_PROFILE_CACHE_KEY);
+    if (raw) {
+      cached = { ...DEFAULT_STORE_PROFILE, ...JSON.parse(raw) };
+    }
+  } catch (e) {
+    console.warn('Error reading store profile cache:', e);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('store_profile')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && data) {
+      const merged: StoreProfile = {
+        store_name: data.store_name || data.name || cached.store_name,
+        tagline: data.tagline || data.category || cached.tagline,
+        address: data.address || cached.address,
+        phone: data.phone || data.whatsapp || cached.phone,
+        footer_message: data.footer_message || cached.footer_message,
+        footer_policy: data.footer_policy || cached.footer_policy,
+        footer_quote: data.footer_quote || cached.footer_quote,
+      };
+      try {
+        localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(merged));
+      } catch {}
+      return merged;
+    }
+  } catch (err) {}
+
+  return cached;
+}
+
+export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProfile> {
+  const cleanProfile: StoreProfile = {
+    store_name: profile.store_name?.trim() || DEFAULT_STORE_PROFILE.store_name,
+    tagline: profile.tagline?.trim() || DEFAULT_STORE_PROFILE.tagline,
+    address: profile.address?.trim() || DEFAULT_STORE_PROFILE.address,
+    phone: profile.phone?.trim() || DEFAULT_STORE_PROFILE.phone,
+    footer_message: profile.footer_message?.trim() || DEFAULT_STORE_PROFILE.footer_message,
+    footer_policy: profile.footer_policy?.trim() || DEFAULT_STORE_PROFILE.footer_policy,
+    footer_quote: profile.footer_quote?.trim() || DEFAULT_STORE_PROFILE.footer_quote,
+  };
+
+  try {
+    localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(cleanProfile));
+  } catch (e) {
+    console.warn('Failed to save store profile to localStorage:', e);
+  }
+
+  try {
+    await supabase
+      .from('store_profile')
+      .upsert({
+        id: 1,
+        ...cleanProfile,
+        updated_at: new Date().toISOString(),
+      });
+  } catch (err) {
+    console.info('Saved store profile locally (store_profile table optional in Supabase)');
+  }
+
+  return cleanProfile;
 }
 
 // ==================== INITIAL DATA SEEDER ====================
