@@ -1075,3 +1075,64 @@ export async function seedInitialProductsIfEmpty(): Promise<boolean> {
     return false;
   }
 }
+// ==================== ORDERS (PESANAN ONLINE) ====================
+
+export async function fetchOrders(): Promise<Order[]> {
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('Error fetching orders:', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.warn('Network exception fetching orders:', err);
+    return [];
+  }
+}
+
+export async function createOrder(order: Omit<Order, 'id' | 'created_at'>): Promise<Order> {
+  const { data, error } = await supabase
+    .from('orders')
+    .insert([order])
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating order:', error);
+    throw error;
+  }
+  return data;
+}
+
+export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PROCESSED' | 'COMPLETED' | 'CANCELLED'): Promise<Order> {
+  let currentOrder: Order | null = null;
+  try {
+    const { data } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+    currentOrder = data;
+  } catch (fetchErr) {
+    console.warn('Error reading order before update:', fetchErr);
+  }
+
+  const { data, error } = await supabase
+    .from('orders')
+    .update({ status })
+    .eq('id', orderId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating order status in Supabase:', error);
+    throw error;
+  }
+
+  return data || { ...currentOrder, id: orderId, status };
+}
