@@ -623,3 +623,77 @@ export async function upsertStoreWallet(wallet: StoreWallet): Promise<StoreWalle
   if (error) throw error;
   return data;
 }
+export interface DeleteSaleItemResult {
+  success: boolean;
+  updatedSale?: Sale;
+  deletedItemName?: string;
+  restoredQty?: number;
+  restoredUnit?: string;
+  newTotalAmount?: number;
+  error?: string;
+}
+
+export async function deleteSaleItem(
+  saleId: string,
+  itemId: string,
+  productId: string,
+  qtyToRestore: number,
+  subtotalToDeduct: number,
+  restoreStock: boolean = true
+): Promise<DeleteSaleItemResult> {
+  try {
+    const localSales = getLocalSales();
+    const existingSale = localSales.find(s => s.id === saleId);
+    const existingItems = existingSale?.items || existingSale?.sale_items || [];
+    
+    const targetItem = existingItems.find(it => 
+      (itemId && it.id === itemId) || (productId && it.product_id === productId)
+    );
+    
+    const prodName = targetItem?.product?.name || 'Produk';
+    const prodUnit = targetItem?.unit || targetItem?.product?.unit || 'pcs';
+    const actualQty = qtyToRestore || Number(targetItem?.qty_kg || targetItem?.qty || 1);
+    const actualSubtotal = subtotalToDeduct || Number(targetItem?.subtotal || 0);
+
+    if (itemId && !itemId.startsWith('item_modal_') && !itemId.startsWith('item_temp_')) {
+      await supabase.from('sale_items').delete().eq('id', itemId);
+    } else if (saleId && productId) {
+      await supabase.from('sale_items').delete().eq('sale_id', saleId).eq('product_id', productId);
+    }
+
+    if (restoreStock && productId) {
+      try {
+        const { data: prodData } = await supabase.from('products').select('stock_kg, unit').eq('id', productId).single();
+        if (prodData) {
+          const newStock = roundStock((prodData.stock_kg || 0) + actualQty, prodData.unit);
+          await supabase.from('products').update({ stock_kg: newStock }).eq('id', productId);
+        }
+      } catch {}
+
+      const localProds = getLocalProducts();
+      saveLocalProducts(localProds.map(p => p.id === productId ? { ...p, stock_kg: roundStock((p.stock_kg || 0) + actualQty, p.unit) } : p));
+    }
+
+    const remainingItems = existingItems.filter(it => !((itemId && it.id === itemId) || (productId && it.product_id === productId)));
+    const newTotal = Math.max(0, remainingItems.reduce((acc, it) => acc + Number(it.subtotal || 0), 0));
+    
+    try {
+      await supabase.from('sales').update({ total_amount: newTotal }).eq('id', saleId);
+    } catch {}
+
+    let updatedSale: Sale | undefined;
+    const updatedSales = localSales.map(s => {
+      if (s.id === saleId) {
+        const up: Sale = { ...s, total_amount: newTotal, items: remainingItems, sale_items: remainingItems };
+        updatedSale = up;
+        return up;
+      }
+      return s;
+    });
+    saveLocalSales(updatedSales);
+
+    return { success: true, updatedSale, deletedItemName: prodName, restoredQty: actualQty, restoredUnit: prodUnit, newTotalAmount: newTotal };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Gagal menghapus item transaksi' };
+  }
+}
