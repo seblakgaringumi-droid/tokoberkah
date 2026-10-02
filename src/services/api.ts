@@ -581,3 +581,45 @@ export interface UtangSyncInfo {
   remainingAmount: number; totalAmount: number; matchingDebt?: DebtCredit | null;
   statusBadge: { label: string; bg: string; badgeText: string };
 }
+
+// ==================== STORE WALLETS ====================
+
+export async function fetchStoreWallets(): Promise<StoreWallet | null> {
+  try {
+    const { data, error } = await supabase
+      .from('store_wallets')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      return { id: 1, initial_cash: 0, operational_budget: 0, shopping_budget: 0, owner_budget: 0 };
+    }
+    return data || { id: 1, initial_cash: 0, operational_budget: 0, shopping_budget: 0, owner_budget: 0 };
+  } catch {
+    return { id: 1, initial_cash: 0, operational_budget: 0, shopping_budget: 0, owner_budget: 0 };
+  }
+}
+
+export async function updateStoreWallet(id: number, updates: Partial<StoreWallet>): Promise<StoreWallet> {
+  const { data, error } = await supabase
+    .from('store_wallets')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function upsertStoreWallet(wallet: StoreWallet): Promise<StoreWallet> {
+  const { data, error } = await supabase
+    .from('store_wallets')
+    .upsert(wallet)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
