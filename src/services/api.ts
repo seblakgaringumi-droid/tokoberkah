@@ -697,3 +697,34 @@ export async function deleteSaleItem(
     return { success: false, error: err.message || 'Gagal menghapus item transaksi' };
   }
 }
+export async function syncCompletedOrdersToSales(): Promise<{ syncedCount: number; sales: Sale[] }> {
+  try {
+    const [orders, sales] = await Promise.all([fetchOrders(), fetchSales()]);
+    const completedOrders = orders.filter(o => (o.status || '').toUpperCase() === 'COMPLETED');
+    let syncedCount = 0;
+
+    for (const order of completedOrders) {
+      const orderIdStr = `#ORD-${order.id}`;
+      const existingSale = sales.find(s => s.notes?.includes(orderIdStr) || s.id === `sale_online_${order.id}`);
+      if (!existingSale) {
+        try {
+          const tempSaleId = `sale_online_${order.id}`;
+          const salePayload = {
+            id: tempSaleId,
+            total_amount: Number(order.total_amount) || 0,
+            payment_method: order.payment_method || 'COD',
+            status: 'COMPLETED',
+            notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'}`,
+            created_at: order.created_at || new Date().toISOString()
+          };
+          await supabase.from('sales').insert([salePayload]);
+          syncedCount++;
+        } catch {}
+      }
+    }
+    const updatedSales = await fetchSales();
+    return { syncedCount, sales: updatedSales };
+  } catch {
+    return { syncedCount: 0, sales: getLocalSales() };
+  }
+}
