@@ -838,4 +838,86 @@ export async function fetchSalesByDateRange(startDateISO: string, endDateISO: st
   });
 }
 
-// ... [Sisa fungsi expenses, orders, debts, store_profile tetap seperti sebelumnya]
+// ==================== STORE PROFILE & RECEIPT SETTINGS ====================
+
+export async function fetchStoreProfile(): Promise<StoreProfile> {
+  let cached: StoreProfile = DEFAULT_STORE_PROFILE;
+  try {
+    const raw = localStorage.getItem(STORE_PROFILE_CACHE_KEY);
+    if (raw) {
+      cached = { ...DEFAULT_STORE_PROFILE, ...JSON.parse(raw) };
+    }
+  } catch (e) {
+    console.warn('Error reading store profile cache:', e);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('store_profile')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && data) {
+      const merged: StoreProfile = {
+        store_name: data.store_name || data.name || cached.store_name,
+        tagline: data.tagline || data.category || cached.tagline,
+        address: data.address || cached.address,
+        phone: data.phone || data.whatsapp || cached.phone,
+        footer_message: data.footer_message || cached.footer_message,
+        footer_policy: data.footer_policy || cached.footer_policy,
+        footer_quote: data.footer_quote || cached.footer_quote,
+      };
+      try {
+        localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(merged));
+      } catch {}
+      return merged;
+    }
+  } catch (err) {}
+
+  return cached;
+}
+
+export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProfile> {
+  const cleanProfile: StoreProfile = {
+    store_name: profile.store_name?.trim() || DEFAULT_STORE_PROFILE.store_name,
+    tagline: profile.tagline?.trim() || DEFAULT_STORE_PROFILE.tagline,
+    address: profile.address?.trim() || DEFAULT_STORE_PROFILE.address,
+    phone: profile.phone?.trim() || DEFAULT_STORE_PROFILE.phone,
+    footer_message: profile.footer_message?.trim() || DEFAULT_STORE_PROFILE.footer_message,
+    footer_policy: profile.footer_policy?.trim() || DEFAULT_STORE_PROFILE.footer_policy,
+    footer_quote: profile.footer_quote?.trim() || DEFAULT_STORE_PROFILE.footer_quote,
+  };
+
+  try {
+    localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(cleanProfile));
+  } catch (e) {
+    console.warn('Failed to save store profile to localStorage:', e);
+  }
+
+  try {
+    await supabase
+      .from('store_profile')
+      .upsert({
+        id: 1,
+        ...cleanProfile,
+        updated_at: new Date().toISOString(),
+      });
+  } catch (err) {
+    console.info('Saved store profile locally (store_profile table optional in Supabase)');
+  }
+
+  return cleanProfile;
+}
+
+// ==================== INITIAL DATA SEEDER ====================
+
+export async function seedInitialProductsIfEmpty(): Promise<boolean> {
+  try {
+    const { data: existing, error } = await supabase.from('products').select('id').limit(1);
+    if (error) return false;
+    return existing && existing.length > 0;
+  } catch (err) {
+    return false;
+  }
+}
