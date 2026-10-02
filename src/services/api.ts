@@ -528,7 +528,15 @@ export interface CheckoutPayload {
 }
 
 export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sale; items: SaleItem[] }> {
-  const tempSaleId = `sale_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  // Gunakan format UUID resmi (RFC4122) yang didukung database PostgreSQL & Supabase
+  const generatedUuid = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+  const tempSaleId = generatedUuid;
   
   const constructedItems: SaleItem[] = payload.items.map((item, idx) => ({
     id: `item_${Date.now()}_${idx}`,
@@ -585,6 +593,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
     const { data: saleData, error: saleError } = await supabase
       .from('sales')
       .insert([{
+        id: generatedUuid,
         total_amount: payload.total_amount,
         payment_method: payload.payment_method,
         status: payload.payment_method === 'UTANG' ? 'unpaid' : 'paid',
@@ -632,6 +641,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
       const updatedList = getLocalSales().map((s) => (s.id === tempSaleId ? finalSale : s));
       saveLocalSales(updatedList);
 
+      // Pengurangan stok real-time langsung ke tabel products di Supabase
       for (const item of payload.items) {
         try {
           const itemUnit = item.unit || item.product.unit;
@@ -1324,6 +1334,7 @@ export async function processOnlineSaleToReports(order: Order): Promise<Sale | n
       const { data: saleData, error: saleError } = await supabase
         .from('sales')
         .insert([{
+          id: tempSaleId,
           total_amount: Number(order.total_amount) || 0,
           payment_method: rawPaymentMethod,
           status: 'COMPLETED',
