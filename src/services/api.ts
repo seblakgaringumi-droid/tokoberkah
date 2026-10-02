@@ -560,7 +560,6 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
   };
 
   const cachedSales = getLocalSales();
-  // 0. Update stok produk di local cache segera agar instan dan konsisten
   const localProducts = getLocalProducts();
   const updatedLocalProducts = localProducts.map((p) => {
     const boughtItem = payload.items.find((it) => String(it.product.id) === String(p.id));
@@ -633,7 +632,6 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
       const updatedList = getLocalSales().map((s) => (s.id === tempSaleId ? finalSale : s));
       saveLocalSales(updatedList);
 
-      // Pengurangan stok real-time langsung ke tabel products di Supabase
       for (const item of payload.items) {
         try {
           const itemUnit = item.unit || item.product.unit;
@@ -649,20 +647,15 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
 
           const newStock = roundStock(Math.max(0, currentStock - item.qty), itemUnit || currentProd?.unit);
           
-          const { error: updateErr } = await supabase
+          await supabase
             .from('products')
             .update({ stock_kg: newStock })
             .eq('id', item.product.id);
-
-          if (updateErr) {
-            console.warn('Error updating Supabase stock for product:', item.product.id, updateErr.message);
-          }
         } catch (stockErr) {
           console.warn('Failed to update product stock for', item.product.name, stockErr);
         }
       }
 
-      // Refresh local products cache with live updated values
       try {
         const refreshedProducts = await fetchProducts();
         saveLocalProducts(refreshedProducts);
@@ -734,115 +727,57 @@ export async function fetchSales(): Promise<Sale[]> {
   try {
     const { data, error } = await supabase
       .from('sales')
-      .select(`
-        *,
-        sale_items (
-          id,
-          sale_id,
-          product_id,
-          qty_kg,
-          subtotal,
-          cost_price,
-          unit,
-          product:products (id, name, unit, selling_price, cost_price, image_url, category, barcode)
-        )
-      `)
+      .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) {
-      console.warn('Sale items join fallback:', error.message);
-      const { data: simpleSales, error: simpleErr } = await supabase
-        .from('sales')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (simpleErr || !simpleSales) {
-        if (localCached.length > 0) return localCached;
-        return [];
-      }
-
-      let allItems: any[] = [];
-      try {
-        const saleIds = simpleSales.map(s => s.id);
-        if (saleIds.length > 0) {
-          const { data: itemsData } = await supabase
-            .from('sale_items')
-            .select('*, product:products(*)')
-            .in('sale_id', saleIds);
-          allItems = itemsData || [];
-        }
-      } catch (itemFetchErr) {
-        console.warn('Separate sale_items fetch error:', itemFetchErr);
-      }
-
-      const itemsBySaleId: Record<string, SaleItem[]> = {};
-      for (const it of allItems) {
-        if (!itemsBySaleId[it.sale_id]) itemsBySaleId[it.sale_id] = [];
-        const prod = it.product || productMap[it.product_id];
-        itemsBySaleId[it.sale_id].push({
-          id: it.id,
-          sale_id: it.sale_id,
-          product_id: it.product_id,
-          qty_kg: Number(it.qty_kg) || Number(it.original_qty) || 1,
-          subtotal: Number(it.subtotal) || 0,
-          cost_price: Number(it.cost_price) || 0,
-          original_qty: Number(it.original_qty) || Number(it.qty_kg) || 1,
-          unit: it.unit || prod?.unit || 'kg',
-          product: prod,
-        });
-      }
-
-      const mergedSales: Sale[] = simpleSales.map(s => {
-        const cachedMatch = localCached.find(c => c.id === s.id);
-        const items = itemsBySaleId[s.id] || cachedMatch?.items || [];
-        return {
-          ...s,
-          items,
-          sale_items: items,
-          cash_received: cachedMatch?.cash_received,
-          change_amount: cachedMatch?.change_amount,
-          customer_name: cachedMatch?.customer_name,
-        };
-      });
-
-      saveLocalSales(mergedSales);
-      return mergedSales;
+    if (error || !data) {
+      console.warn('Fetch sales fallback to local cache:', error?.message);
+      return localCached.length > 0 ? localCached : [];
     }
 
-    const normalizedSales: Sale[] = (data || []).map((sale: any) => {
-      const rawItems = sale.sale_items || sale.items || [];
-      const cachedMatch = localCached.find(c => c.id === sale.id);
+    let allSaleItems: any[] = [];
+    try {
+      const { data: itemsData } = await supabase
+        .from('sale_items')
+        .select('*');
+      allSaleItems = itemsData || [];
+    } catch (itErr) {
+      console.warn('Error fetching sale_items list:', itErr);
+    }
 
-      let items: SaleItem[] = rawItems.map((it: any) => {
-        const prod = it.product || productMap[it.product_id] || (cachedMatch?.items?.find(ci => ci.product_id === it.product_id)?.product);
-        return {
-          id: it.id,
-          sale_id: it.sale_id || sale.id,
-          product_id: it.product_id,
-          qty_kg: Number(it.qty_kg) || Number(it.original_qty) || 1,
-          subtotal: Number(it.subtotal) || 0,
-          cost_price: Number(it.cost_price) || 0,
-          original_qty: Number(it.original_qty) || Number(it.qty_kg) || 1,
-          unit: it.unit || prod?.unit || 'kg',
-          product: prod ? {
-            id: prod.id || it.product_id,
-            name: prod.name || 'Barang Sembako',
-            category: prod.category || 'Sembako',
-            selling_price: prod.selling_price || (it.subtotal && it.qty_kg ? it.subtotal / it.qty_kg : 0),
-            cost_price: prod.cost_price || it.cost_price || 0,
-            stock_kg: prod.stock_kg || 0,
-            min_stock: prod.min_stock || 0,
-            is_active: true,
-            image_url: prod.image_url || null,
-            unit: prod.unit || it.unit || 'kg',
-            barcode: prod.barcode || null,
-          } : undefined,
-        };
+    const itemsBySaleId: Record<string, SaleItem[]> = {};
+    for (const it of allSaleItems) {
+      if (!itemsBySaleId[it.sale_id]) itemsBySaleId[it.sale_id] = [];
+      const prod = productMap[it.product_id] || {
+        id: it.product_id,
+        name: 'Produk Kasir',
+        category: 'Sembako',
+        selling_price: it.subtotal && it.qty_kg ? it.subtotal / it.qty_kg : 0,
+        cost_price: it.cost_price || 0,
+        stock_kg: 0,
+        min_stock: 0,
+        is_active: true,
+        image_url: null,
+        unit: it.unit || 'pcs',
+        barcode: null
+      };
+
+      itemsBySaleId[it.sale_id].push({
+        id: it.id,
+        sale_id: it.sale_id,
+        product_id: it.product_id,
+        qty_kg: Number(it.qty_kg) || Number(it.original_qty) || 1,
+        subtotal: Number(it.subtotal) || 0,
+        cost_price: Number(it.cost_price) || 0,
+        original_qty: Number(it.original_qty) || Number(it.qty_kg) || 1,
+        unit: it.unit || prod?.unit || 'kg',
+        product: prod,
       });
+    }
 
-      if (items.length === 0 && cachedMatch?.items && cachedMatch.items.length > 0) {
-        items = cachedMatch.items;
-      }
+    const normalizedSales: Sale[] = data.map((sale: any) => {
+      const cachedMatch = localCached.find(c => c.id === sale.id);
+      const items = itemsBySaleId[sale.id] || cachedMatch?.items || cachedMatch?.sale_items || [];
 
       return {
         ...sale,
@@ -874,19 +809,7 @@ export async function fetchSalesByDateRange(startDateISO: string, endDateISO: st
   try {
     const { data, error } = await supabase
       .from('sales')
-      .select(`
-        *,
-        sale_items (
-          id,
-          sale_id,
-          product_id,
-          qty_kg,
-          subtotal,
-          cost_price,
-          unit,
-          product:products (id, name, unit, selling_price, cost_price, image_url, category, barcode)
-        )
-      `)
+      .select('*')
       .gte('created_at', startDateISO)
       .lte('created_at', endDateISO)
       .order('created_at', { ascending: false });
