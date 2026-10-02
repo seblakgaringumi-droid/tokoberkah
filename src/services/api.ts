@@ -47,7 +47,7 @@ function getLocalImageMap(): Record<string, string> {
     const raw = localStorage.getItem(PRODUCT_IMAGES_KEY);
     const map = raw ? JSON.parse(raw) : {};
     Object.keys(map).forEach((key) => {
-      if (typeof map[key] === 'string' && map[key].startsWith('blob:')) {
+      if (typeof map[key] === 'string' && (map[key].startsWith('blob:') || map[key].includes('kquxfvcbgogjpthhsseg'))) {
         delete map[key];
       }
     });
@@ -149,7 +149,16 @@ export async function fetchProducts(): Promise<Product[]> {
       const cached = getLocalProducts();
       if (cached.length > 0) {
         return cached.map((p) => {
-          const rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
+          let rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
+          if (rawImg && rawImg.includes('kquxfvcbgogjpthhsseg')) {
+            rawImg = rawImg.replace('kquxfvcbgogjpthhsseg.supabase.co', 'bjogkxquvqgikypjpmkz.supabase.co');
+          }
+          if (rawImg && rawImg.includes(' ') && !rawImg.includes('%20')) {
+            const urlParts = rawImg.split('/products/');
+            if (urlParts.length === 2) {
+              rawImg = `${urlParts[0]}/products/${encodeURIComponent(urlParts[1])}`;
+            }
+          }
           const validImg = rawImg && !rawImg.startsWith('blob:') ? rawImg : null;
           return { ...p, image_url: validImg };
         });
@@ -168,9 +177,19 @@ export async function fetchProducts(): Promise<Product[]> {
     const processed: Product[] = (data || []).map((p: any) => {
       const dbImg = p.image_url || p.image || null;
       const cachedImg = localMap[p.id] || null;
-      const chosenImg = (dbImg && !dbImg.startsWith('blob:')) 
+      let chosenImg = (dbImg && !dbImg.startsWith('blob:')) 
         ? dbImg 
         : (cachedImg && !cachedImg.startsWith('blob:') ? cachedImg : null);
+
+      if (chosenImg && chosenImg.includes('kquxfvcbgogjpthhsseg')) {
+        chosenImg = chosenImg.replace('kquxfvcbgogjpthhsseg.supabase.co', 'bjogkxquvqgikypjpmkz.supabase.co');
+      }
+      if (chosenImg && chosenImg.includes(' ') && !chosenImg.includes('%20')) {
+        const urlParts = chosenImg.split('/products/');
+        if (urlParts.length === 2) {
+          chosenImg = `${urlParts[0]}/products/${encodeURIComponent(urlParts[1])}`;
+        }
+      }
 
       const roundedStock = typeof p.stock_kg === 'number' ? roundStock(p.stock_kg, p.unit) : p.stock_kg;
       const roundedMinStock = typeof p.min_stock === 'number' ? roundStock(p.min_stock, p.unit) : p.min_stock;
@@ -198,7 +217,16 @@ export async function fetchProducts(): Promise<Product[]> {
     const cached = getLocalProducts();
     if (cached.length > 0) {
       return cached.map((p) => {
-        const rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
+        let rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
+        if (rawImg && rawImg.includes('kquxfvcbgogjpthhsseg')) {
+          rawImg = rawImg.replace('kquxfvcbgogjpthhsseg.supabase.co', 'bjogkxquvqgikypjpmkz.supabase.co');
+        }
+        if (rawImg && rawImg.includes(' ') && !rawImg.includes('%20')) {
+          const urlParts = rawImg.split('/products/');
+          if (urlParts.length === 2) {
+            rawImg = `${urlParts[0]}/products/${encodeURIComponent(urlParts[1])}`;
+          }
+        }
         const validImg = rawImg && !rawImg.startsWith('blob:') ? rawImg : null;
         return {
           ...p,
