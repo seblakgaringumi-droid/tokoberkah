@@ -1096,12 +1096,10 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                       : (typeof getLocalProducts === 'function' ? getLocalProducts() : []);
                     const items: SaleItem[] = (() => {
                       if (sale.items && Array.isArray(sale.items) && sale.items.length > 0) {
-                        const hasReal = sale.items.some(it => it.product?.name && !it.product.name.startsWith('Transaksi Penjualan Kasir'));
-                        if (hasReal) return sale.items;
+                        return sale.items;
                       }
                       if (sale.sale_items && Array.isArray(sale.sale_items) && sale.sale_items.length > 0) {
-                        const hasReal = sale.sale_items.some(it => it.product?.name && !it.product.name.startsWith('Transaksi Penjualan Kasir'));
-                        if (hasReal) return sale.sale_items;
+                        return sale.sale_items;
                       }
 
                       // 1. Cek dari catatan pesanan online (#ORD-xxx)
@@ -1145,13 +1143,13 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         }
                       }
 
-                      // 2. Cek jika catatan transaksi (notes) berisi nama barang spesifik
+                      // 2. Cek jika catatan transaksi (notes) berisi daftar rincian barang dari kasir
                       const notesRaw = (sale.notes || '').trim();
                       if (notesRaw && !notesRaw.startsWith('Transaksi kasir') && !notesRaw.startsWith('Pelanggan: Pelanggan')) {
                         const cleanedNote = notesRaw.replace(/^Pelanggan:\s*[^•]+\s*•\s*/i, '').replace(/^Pelanggan:\s*/i, '');
-                        if (cleanedNote && cleanedNote.length > 2) {
+                        if (cleanedNote && cleanedNote.includes('(') && cleanedNote.includes(')')) {
                           const parts = cleanedNote.split(/,\s*/);
-                          if (parts.length > 0 && parts[0].length > 2) {
+                          if (parts.length > 0) {
                             const subPerItem = Math.round((Number(sale.total_amount) || 0) / parts.length);
                             return parts.map((part, pIdx) => {
                               const qtyMatch = part.match(/\(([\d.]+)\s*([a-zA-Z]+)\)/);
@@ -1185,99 +1183,6 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                             });
                           }
                         }
-                      }
-
-                      // 3. Rekonstruksi Cerdas dari Katalog Produk Toko Berdasarkan Nominal
-                      const totalAmount = Number(sale.total_amount) || 0;
-                      if (totalAmount > 0) {
-                        const directMatch = allProducts.find(p => Number(p.selling_price) === totalAmount);
-                        if (directMatch) {
-                          return [{
-                            id: `auto_item_${sale.id}_0`,
-                            sale_id: sale.id,
-                            product_id: directMatch.id,
-                            qty_kg: 1,
-                            qty: 1,
-                            subtotal: totalAmount,
-                            cost_price: Number(directMatch.cost_price) || Math.round(totalAmount * 0.8),
-                            original_qty: 1,
-                            unit: directMatch.unit || 'pcs',
-                            product: directMatch,
-                          }];
-                        }
-
-                        // Cek kelipatan produk
-                        for (const p of allProducts) {
-                          const pPrice = Number(p.selling_price) || 0;
-                          if (pPrice > 0 && totalAmount % pPrice === 0 && totalAmount / pPrice <= 10) {
-                            const q = totalAmount / pPrice;
-                            return [{
-                              id: `auto_item_${sale.id}_0`,
-                              sale_id: sale.id,
-                              product_id: p.id,
-                              qty_kg: q,
-                              qty: q,
-                              subtotal: totalAmount,
-                              cost_price: (Number(p.cost_price) || Math.round(pPrice * 0.8)) * q,
-                              original_qty: q,
-                              unit: p.unit || 'pcs',
-                              product: p,
-                            }];
-                          }
-                        }
-
-                        // Nama representatif spesifik sesuai item sembako aktual
-                        let itemName = 'Paket Sembako Harian';
-                        let itemUnit = 'paket';
-                        let itemQty = 1;
-
-                        if (totalAmount === 22000) {
-                          itemName = 'Minyak Goreng & Bumbu Dapur';
-                          itemUnit = 'paket';
-                        } else if (totalAmount === 14000) {
-                          itemName = 'Telur Ayam Ras (1/2 kg) & Bumbu';
-                          itemUnit = 'paket';
-                        } else if (totalAmount === 13500) {
-                          itemName = 'Beras Setra Ramos (1 kg)';
-                          itemUnit = 'kg';
-                        } else if (totalAmount === 38000) {
-                          itemName = 'Bawang Merah Brebes Pilihan (1 kg)';
-                          itemUnit = 'kg';
-                        } else if (totalAmount === 16000) {
-                          itemName = 'Beras Pandan Wangi Super (1 kg)';
-                          itemUnit = 'kg';
-                        } else if (totalAmount < 5000) {
-                          itemName = 'Bumbu Dapur & Penyedap Masak';
-                          itemUnit = 'bungkus';
-                        } else {
-                          itemName = `Belanja Sembako & Kebutuhan Toko (${formatRupiah(totalAmount)})`;
-                          itemUnit = 'paket';
-                        }
-
-                        return [{
-                          id: `fallback_item_${sale.id}`,
-                          sale_id: sale.id,
-                          product_id: 'prod_general',
-                          qty_kg: itemQty,
-                          qty: itemQty,
-                          subtotal: totalAmount,
-                          cost_price: Math.round(totalAmount * 0.8),
-                          original_qty: itemQty,
-                          unit: itemUnit,
-                          product: {
-                            id: 'prod_general',
-                            name: itemName,
-                            category: 'Sembako',
-                            selling_price: totalAmount,
-                            cost_price: Math.round(totalAmount * 0.8),
-                            stock_kg: 0,
-                            min_stock: 0,
-                            is_active: true,
-                            image_url: null,
-                            unit: itemUnit,
-                            barcode: null,
-                          },
-                        }];
                       }
 
                       return [];
