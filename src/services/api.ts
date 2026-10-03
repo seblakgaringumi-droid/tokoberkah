@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { Product, Sale, SaleItem, Expense, Order, DebtCredit, DebtPayment, CashFlowEntry, StoreWallet, StoreProfile } from '../types';
+import { Product, Sale, SaleItem, Expense, Order, DebtCredit, DebtPayment, CashFlowEntry, StoreWallet, StoreProfile, ProductVariant } from '../types';
 import { roundStock } from '../lib/utils';
 
 // ==================== LOCAL CACHE HELPERS ====================
@@ -234,9 +234,25 @@ export async function fetchProducts(): Promise<Product[]> {
         }
       }
 
+      // Robust Parsing variants_json agar selalu terbaca sebagai Array di Kasir
+      let variants: ProductVariant[] = [];
+      if (p.variants_json) {
+        if (Array.isArray(p.variants_json)) {
+          variants = p.variants_json;
+        } else if (typeof p.variants_json === 'string') {
+          try {
+            const parsed = JSON.parse(p.variants_json);
+            if (Array.isArray(parsed)) variants = parsed;
+          } catch {
+            variants = [];
+          }
+        }
+      }
+
       return {
         ...p,
         image_url: chosenImg,
+        variants_json: variants,
         stock_kg: typeof p.stock_kg === 'number' ? roundStock(p.stock_kg, p.unit) : p.stock_kg,
         min_stock: typeof p.min_stock === 'number' ? roundStock(p.min_stock, p.unit) : p.min_stock,
       };
@@ -252,9 +268,12 @@ export async function fetchProducts(): Promise<Product[]> {
 
 export async function createProduct(product: Omit<Product, 'id'>): Promise<Product> {
   const cleanImageUrl = product.image_url && !product.image_url.startsWith('blob:') ? product.image_url : null;
+  const cleanVariants = Array.isArray(product.variants_json) ? product.variants_json : [];
+  
   const cleanPayload = {
     ...product,
     image_url: cleanImageUrl,
+    variants_json: cleanVariants,
     stock_kg: roundStock(Number(product.stock_kg) || 0, product.unit),
     min_stock: roundStock(Number(product.min_stock) || 0, product.unit),
   };
@@ -285,7 +304,7 @@ export async function createProduct(product: Omit<Product, 'id'>): Promise<Produ
 
     const finalImageUrl = data.image_url || cleanImageUrl;
     if (finalImageUrl) saveLocalImage(data.id, finalImageUrl);
-    return { ...data, image_url: finalImageUrl };
+    return { ...data, image_url: finalImageUrl, variants_json: cleanVariants };
   } catch (err) {
     return localProduct;
   }
@@ -538,7 +557,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
   };
 }
 
-// IN-MEMORY ENRICHMENT: Mengatasi Foreign Key / PGRST200 schema cache error
+// IN-MEMORY ENRICHMENT: Memastikan Rincian Pembelian di Laporan Muncul 100%
 export async function fetchSales(): Promise<Sale[]> {
   const localCached = getLocalSales();
   const localProducts = getLocalProducts();
@@ -557,7 +576,9 @@ export async function fetchSales(): Promise<Sale[]> {
 
     let allSaleItems: any[] = [];
     try {
-      const { data: itemsData } = await supabase.from('sale_items').select('*');
+      const { data: itemsData } = await supabase
+        .from('sale_items')
+        .select('*');
       allSaleItems = itemsData || [];
     } catch (itErr) {
       console.warn('fetch sale_items separated note:', itErr);
@@ -759,7 +780,6 @@ export async function createExpense(expense: { title: string; amount: number; ca
     .select()
     .single();
 
-  // Fallback otomatis jika kolom source belum terpasang di database
   if (error) {
     if (error.message && (error.message.toLowerCase().includes('source') || error.message.toLowerCase().includes('column'))) {
       const fallbackExpense = {
