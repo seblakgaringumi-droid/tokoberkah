@@ -72,17 +72,18 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
     const fetchItemsRelation = async () => {
       try {
         // 1. Check sale_items in Supabase
-        const { data: dbItems } = await supabase
+        const { data: dbItems, error: dbErr } = await supabase
           .from('sale_items')
-          .select('*, product:products(*)')
+          .select('*')
           .eq('sale_id', sale.id);
 
-        if (dbItems && dbItems.length > 0 && isMounted) {
+        if (!dbErr && dbItems && dbItems.length > 0 && isMounted) {
           const formatted: SaleItem[] = dbItems.map((it: any) => ({
             id: it.id,
             sale_id: it.sale_id,
             product_id: it.product_id,
             qty_kg: Number(it.qty_kg) || Number(it.original_qty) || 1,
+            qty: Number(it.qty_kg) || Number(it.original_qty) || 1,
             subtotal: Number(it.subtotal) || 0,
             cost_price: Number(it.cost_price) || 0,
             original_qty: Number(it.original_qty) || Number(it.qty_kg) || 1,
@@ -170,9 +171,31 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
     return () => { isMounted = false; };
   }, [sale]);
 
-  if (!isOpen || !sale) return null;
-
   const activeSale = currentSale || sale;
+
+  // Sinkronisasi status utang/piutang secara real-time dari data buku utang (Dipanggil sebelum early return sesuai aturan Hooks)
+  const utangInfo = useMemo(() => {
+    if (!activeSale) {
+      return {
+        isUtang: false,
+        isLunas: true,
+        isPartial: false,
+        isUnpaid: false,
+        remainingAmount: 0,
+        totalAmount: 0,
+        matchingDebt: null,
+        statusBadge: {
+          label: 'Lunas',
+          bg: 'bg-emerald-50 text-[#1B5E20] border-emerald-200',
+          badgeText: 'LUNAS',
+        },
+      };
+    }
+    return getSaleDebtInfo(activeSale, debts);
+  }, [activeSale, debts]);
+
+  if (!isOpen || !sale || !activeSale) return null;
+
   const items = loadedItems.length > 0 ? loadedItems : (activeSale.items || activeSale.sale_items || []);
   const isUtang = activeSale.payment_method === 'UTANG' || activeSale.status === 'unpaid';
   const totalQty = items.reduce((acc, it) => acc + (Number(it.qty_kg ?? it.qty ?? it.original_qty) || 1), 0);
@@ -253,11 +276,6 @@ export const DetailStrukModal: React.FC<DetailStrukModalProps> = ({
       setIsDeleting(false);
     }
   };
-
-  // Sinkronisasi status utang/piutang secara real-time dari data buku utang
-  const utangInfo = useMemo(() => {
-    return getSaleDebtInfo(activeSale, debts);
-  }, [activeSale, debts]);
 
   // Handler untuk pelunasan utang langsung dari struk
   const handleInlinePayDebt = async () => {
