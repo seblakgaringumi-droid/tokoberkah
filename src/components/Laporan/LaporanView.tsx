@@ -39,7 +39,7 @@ import {
 import { Sale, Expense, StoreWallet, StoreProfile, DebtPayment, DebtCredit } from '../../types';
 import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
 import { useFinance } from '../../context/FinanceContext';
-import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo } from '../../services/api';
+import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo, getLocalOrders } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
 import { SinkingFundCard } from './SinkingFundCard';
@@ -1089,15 +1089,93 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                   </tr>
                 ) : (
                   filteredSales.map((sale, index) => {
-                    const items = sale.items || sale.sale_items || [];
+                    const items = (() => {
+                      if (sale.items && Array.isArray(sale.items) && sale.items.length > 0) return sale.items;
+                      if (sale.sale_items && Array.isArray(sale.sale_items) && sale.sale_items.length > 0) return sale.sale_items;
+
+                      // 1. Cek dari catatan pesanan online (#ORD-xxx)
+                      const orderMatch = (sale.notes || '').match(/#ORD-(\d+)/i) || (sale.notes || '').match(/ORD-(\d+)/i) || sale.id.match(/sale_online_(\d+)/i);
+                      if (orderMatch && orderMatch[1]) {
+                        const ordId = Number(orderMatch[1]);
+                        const localOrders = getLocalOrders();
+                        const matchedOrder = localOrders.find((o) => o.id === ordId);
+                        if (matchedOrder && matchedOrder.items_json) {
+                          let raw: any[] = [];
+                          if (Array.isArray(matchedOrder.items_json)) raw = matchedOrder.items_json;
+                          else if (typeof matchedOrder.items_json === 'string') {
+                            try { raw = JSON.parse(matchedOrder.items_json); } catch {}
+                          }
+                          if (raw.length > 0) {
+                            return raw.map((it: any, idx: number) => ({
+                              id: `order_item_${ordId}_${idx}`,
+                              sale_id: sale.id,
+                              product_id: it.product_id || it.id || String(idx),
+                              qty_kg: Number(it.quantity || it.qty || it.qty_kg || 1),
+                              qty: Number(it.quantity || it.qty || it.qty_kg || 1),
+                              subtotal: Number(it.subtotal || (Number(it.price || it.selling_price || 0) * Number(it.quantity || it.qty || 1))),
+                              cost_price: Number(it.cost_price || 0),
+                              original_qty: Number(it.quantity || it.qty || it.qty_kg || 1),
+                              unit: it.unit || 'pcs',
+                              product: it.product || {
+                                id: it.product_id || it.id,
+                                name: it.product_name || it.name || 'Barang Sembako',
+                                unit: it.unit || 'pcs',
+                                selling_price: it.price || it.selling_price || 0,
+                                cost_price: 0,
+                                stock_kg: 0,
+                                min_stock: 0,
+                                is_active: true,
+                                category: 'Sembako',
+                                image_url: null,
+                                barcode: null,
+                              },
+                            }));
+                          }
+                        }
+                      }
+
+                      // 2. Fallback representatif untuk transaksi lama jika belum ada baris individual sale_items
+                      if (Number(sale.total_amount) > 0) {
+                        const custNote = sale.notes || sale.customer_name;
+                        const desc = custNote ? `Belanja Kasir (${custNote})` : 'Transaksi Penjualan Kasir (Sembako & Harian)';
+                        return [{
+                          id: `fallback_item_${sale.id}`,
+                          sale_id: sale.id,
+                          product_id: 'prod_general',
+                          qty_kg: 1,
+                          qty: 1,
+                          subtotal: Number(sale.total_amount),
+                          cost_price: Math.round(Number(sale.total_amount) * 0.8),
+                          original_qty: 1,
+                          unit: 'transaksi',
+                          product: {
+                            id: 'prod_general',
+                            name: desc,
+                            category: 'Sembako',
+                            selling_price: Number(sale.total_amount),
+                            cost_price: Math.round(Number(sale.total_amount) * 0.8),
+                            stock_kg: 0,
+                            min_stock: 0,
+                            is_active: true,
+                            image_url: null,
+                            unit: 'transaksi',
+                            barcode: null,
+                          },
+                        }];
+                      }
+
+                      return [];
+                    })();
+
+                    const effectiveSale = { ...sale, items, sale_items: items };
                     const isExpanded = expandedSaleIds.has(sale.id);
-                    const totalQty = items.reduce((acc, it) => acc + (Number(it.qty_kg) || 1), 0);
+                    const totalQty = items.reduce((acc, it) => acc + (Number(it.qty_kg || it.qty) || 1), 0);
 
                     // Formatted summary text e.g. "Beras Heler Pulen (1 kg) x1, Bawang Merah (250 gr) x1"
                     const summaryText = items.length > 0 
                       ? items.map(it => {
                           const name = it.product?.name || 'Barang Sembako';
-                          const qty = it.qty_kg;
+                          const qty = it.qty_kg || it.qty || 1;
                           const unit = it.unit || it.product?.unit || 'kg';
                           return `${name} (${qty} ${unit})`;
                         }).join(', ')
@@ -1111,7 +1189,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                     return (
                       <React.Fragment key={sale.id}>
                         <tr 
-                          onClick={() => setSelectedSaleForDetail(sale)}
+                          onClick={() => setSelectedSaleForDetail(effectiveSale)}
                           className={`hover:bg-emerald-50/40 transition-colors cursor-pointer ${
                             isExpanded ? 'bg-emerald-50/20' : ''
                           }`}
@@ -1241,7 +1319,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                             <div className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
-                                onClick={() => setSelectedSaleForDetail(sale)}
+                                onClick={() => setSelectedSaleForDetail(effectiveSale)}
                                 title="Lihat Rincian Struk"
                                 className="px-2 py-1 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-100 text-gray-700 font-medium inline-flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
                               >
@@ -1250,7 +1328,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setSelectedSaleForReceipt(sale)}
+                                onClick={() => setSelectedSaleForReceipt(effectiveSale)}
                                 title="Cetak Ulang Struk Kasir"
                                 className="px-2.5 py-1 text-xs rounded-lg bg-[#2E7D32] hover:bg-[#1B5E20] text-white font-medium inline-flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
                               >
@@ -1275,7 +1353,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                                   </div>
                                   <button
                                     type="button"
-                                    onClick={() => setSelectedSaleForDetail(sale)}
+                                    onClick={() => setSelectedSaleForDetail(effectiveSale)}
                                     className="text-xs text-[#2E7D32] hover:text-[#1B5E20] font-semibold inline-flex items-center gap-1 hover:underline cursor-pointer"
                                   >
                                     <Eye className="w-3 h-3" />
@@ -1312,7 +1390,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                                               type="button"
                                               onClick={(e) => {
                                                 e.stopPropagation();
-                                                setSelectedSaleForDetail(sale);
+                                                setSelectedSaleForDetail(effectiveSale);
                                               }}
                                               title="Hapus / kelola rincian item"
                                               className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
