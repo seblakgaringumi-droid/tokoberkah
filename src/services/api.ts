@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { Product, Sale, SaleItem, Expense, Order, DebtCredit, DebtPayment, CashFlowEntry, StoreWallet, StoreProfile, ProductVariant } from '../types';
+import { Product, Sale, SaleItem, Expense, Order, DebtCredit, DebtPayment, CashFlowEntry, StoreWallet, StoreProfile } from '../types';
 import { roundStock } from '../lib/utils';
 
 // ==================== LOCAL CACHE HELPERS ====================
@@ -46,8 +46,9 @@ function getLocalImageMap(): Record<string, string> {
   try {
     const raw = localStorage.getItem(PRODUCT_IMAGES_KEY);
     const map = raw ? JSON.parse(raw) : {};
+    // Clean out any expired blob URLs from cache
     Object.keys(map).forEach((key) => {
-      if (typeof map[key] === 'string' && (map[key].startsWith('blob:') || map[key].includes('kquxfvcbgogjpthhsseg'))) {
+      if (typeof map[key] === 'string' && map[key].startsWith('blob:')) {
         delete map[key];
       }
     });
@@ -71,70 +72,291 @@ function saveLocalImage(id: string, url: string | null) {
   }
 }
 
-export function getLocalWallet(): StoreWallet {
+// ==================== PRODUCTS ====================
+
+export async function fetchProducts(): Promise<Product[]> {
+  const localMap = getLocalImageMap();
   try {
-    const raw = localStorage.getItem(WALLET_CACHE_KEY);
-    return raw ? JSON.parse(raw) : {
-      id: 1,
-      initial_cash: 0,
-      operational_budget: 0,
-      shopping_budget: 0,
-      owner_budget: 0,
-    };
-  } catch {
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase fetch products returned error, using local cache:', error.message);
+      const cached = getLocalProducts();
+      if (cached.length > 0) {
+        return cached.map((p) => {
+          const rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
+          const validImg = rawImg && !rawImg.startsWith('blob:') ? rawImg : null;
+          return { ...p, image_url: validImg };
+        });
+      }
+      return [];
+    }
+
+    // Clean floating point artifacts and resolve permanent database image
+    const existingLocal = getLocalProducts();
+    const localVariantMap: Record<string, any> = {};
+    existingLocal.forEach((lp) => {
+      if (lp.variants_json && (Array.isArray(lp.variants_json) ? lp.variants_json.length > 0 : true)) {
+        localVariantMap[lp.id] = lp.variants_json;
+      }
+    });
+
+    const processed: Product[] = (data || []).map((p: any) => {
+      // Prioritize database image_url or image column
+      const dbImg = p.image_url || p.image || null;
+      const cachedImg = localMap[p.id] || null;
+      const chosenImg = (dbImg && !dbImg.startsWith('blob:')) 
+        ? dbImg 
+        : (cachedImg && !cachedImg.startsWith('blob:') ? cachedImg : null);
+
+      const roundedStock = typeof p.stock_kg === 'number' ? roundStock(p.stock_kg, p.unit) : p.stock_kg;
+      const roundedMinStock = typeof p.min_stock === 'number' ? roundStock(p.min_stock, p.unit) : p.min_stock;
+      const variants = (p.variants_json !== undefined && p.variants_json !== null)
+        ? p.variants_json
+        : (localVariantMap[p.id] || []);
+
+      // Auto-reconcile / repair stock with excessive decimals directly in database
+      if (typeof p.stock_kg === 'number' && p.stock_kg !== roundedStock) {
+        supabase.from('products').update({ stock_kg: roundedStock }).eq('id', p.id).then();
+      }
+
+      return {
+        ...p,
+        image_url: chosenImg,
+        stock_kg: roundedStock,
+        min_stock: roundedMinStock,
+        variants_json: variants,
+      };
+    });
+
+    saveLocalProducts(processed);
+    return processed;
+  } catch (err: any) {
+    console.warn('fetchProducts network/fetch exception, falling back to cache:', err);
+    const cached = getLocalProducts();
+    if (cached.length > 0) {
+      return cached.map((p) => {
+        const rawImg = p.image_url || (p as any).image || localMap[p.id] || null;
+        const validImg = rawImg && !rawImg.startsWith('blob:') ? rawImg : null;
+        return {
+          ...p,
+          image_url: validImg,
+        };
+      });
+    }
+    return [];
+  }
+}
+
+export async function createProduct(product: Omit<Product, 'id'>): Promise<Product> {
+  const cleanImageUrl = product.image_url && !product.image_url.startsWith('blob:') ? product.image_url : null;
+  const cleanPayload = {
+    ...product,
+    image_url: cleanImageUrl,
+    stock_kg: roundStock(Number(product.stock_kg) || 0, product.unit),
+    min_stock: roundStock(Number(product.min_stock) || 0, product.unit),
+  };
+
+  const tempId = `prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const localProduct: Product = {
+    id: tempId,
+    ...cleanPayload,
+    image_url: cleanImageUrl,
+  };
+
+  if (cleanImageUrl) {
+    saveLocalImage(tempId, cleanImageUrl);
+  }
+
+  const localList = getLocalProducts();
+  saveLocalProducts([localProduct, ...localList]);
+
+  try {
+    const { data, error } = await supabase
+      .from('products')
+      .insert([cleanPayload])
+      .select()
+      .single();
+
+    if (error) {
+      console.warn('Supabase insert note, checking column fallback:', error.message);
+      if (error.message && (error.message.includes('variants_json') || error.message.includes('column'))) {
+        const withoutVariants = { ...cleanPayload };
+        delete (withoutVariants as any).variants_json;
+        const { data: retryData2, error: retryError2 } = await supabase
+          .from('products')
+          .insert([withoutVariants])
+          .select()
+          .single();
+        if (!retryError2 && retryData2) {
+          const finalImg = retryData2.image_url || retryData2.image || cleanImageUrl;
+          return { ...retryData2, image_url: finalImg, variants_json: cleanPayload.variants_json };
+        }
+      }
+      if (cleanImageUrl) {
+        // Retry with 'image' column in case database table used 'image' instead of 'image_url'
+        const withAlternativeColumn = { ...cleanPayload, image: cleanImageUrl } as any;
+        delete withAlternativeColumn.image_url;
+        const { data: retryData, error: retryError } = await supabase
+          .from('products')
+          .insert([withAlternativeColumn])
+          .select()
+          .single();
+        if (!retryError && retryData) {
+          saveLocalImage(retryData.id, cleanImageUrl);
+          return { ...retryData, image_url: cleanImageUrl };
+        }
+      }
+      return localProduct;
+    }
+
+    const finalImageUrl = data.image_url || (data as any).image || cleanImageUrl;
+    if (finalImageUrl) {
+      saveLocalImage(data.id, finalImageUrl);
+    }
+    return { ...data, image_url: finalImageUrl };
+  } catch (err) {
+    console.warn('createProduct fetch exception, returned local product:', err);
+    return localProduct;
+  }
+}
+
+export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product> {
+  const cleanUpdates = { ...updates };
+  if (cleanUpdates.stock_kg !== undefined) {
+    cleanUpdates.stock_kg = roundStock(Number(cleanUpdates.stock_kg) || 0, cleanUpdates.unit);
+  }
+  if (cleanUpdates.min_stock !== undefined) {
+    cleanUpdates.min_stock = roundStock(Number(cleanUpdates.min_stock) || 0, cleanUpdates.unit);
+  }
+
+  // Ensure no blob: URL is sent
+  if ('image_url' in cleanUpdates) {
+    if (cleanUpdates.image_url && cleanUpdates.image_url.startsWith('blob:')) {
+      cleanUpdates.image_url = null;
+    }
+    saveLocalImage(id, cleanUpdates.image_url || null);
+  }
+
+  // Update local cache immediately
+  const localList = getLocalProducts();
+  const idx = localList.findIndex((p) => String(p.id) === String(id));
+  let updatedLocal: Product;
+  if (idx >= 0) {
+    updatedLocal = { ...localList[idx], ...cleanUpdates };
+    localList[idx] = updatedLocal;
+    saveLocalProducts(localList);
+  } else {
+    updatedLocal = { id, ...cleanUpdates } as Product;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('products')
+      .update(cleanUpdates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.warn('Supabase update note, checking image column fallback:', error.message);
+      if (error.message && (error.message.includes('variants_json') || error.message.includes('column'))) {
+        const withoutVariants = { ...cleanUpdates };
+        delete (withoutVariants as any).variants_json;
+        const { data: retryData2, error: retryError2 } = await supabase
+          .from('products')
+          .update(withoutVariants)
+          .eq('id', id)
+          .select()
+          .single();
+        if (!retryError2 && retryData2) {
+          const finalImg = retryData2.image_url || retryData2.image || cleanUpdates.image_url || null;
+          return { ...retryData2, image_url: finalImg, variants_json: cleanUpdates.variants_json };
+        }
+      }
+      if ('image_url' in cleanUpdates) {
+        const withAlternativeColumn = { ...cleanUpdates, image: cleanUpdates.image_url } as any;
+        delete withAlternativeColumn.image_url;
+        const { data: retryData, error: retryError } = await supabase
+          .from('products')
+          .update(withAlternativeColumn)
+          .eq('id', id)
+          .select()
+          .single();
+        if (!retryError && retryData) {
+          const finalImg = retryData.image_url || retryData.image || cleanUpdates.image_url || null;
+          saveLocalImage(id, finalImg);
+          return { ...retryData, image_url: finalImg };
+        }
+      }
+      return updatedLocal;
+    }
+
+    const finalImg = data.image_url || (data as any).image || cleanUpdates.image_url || null;
+    if (finalImg) {
+      saveLocalImage(data.id, finalImg);
+    }
     return {
-      id: 1,
-      initial_cash: 0,
-      operational_budget: 0,
-      shopping_budget: 0,
-      owner_budget: 0,
+      ...data,
+      image_url: finalImg,
     };
+  } catch (err) {
+    console.warn('updateProduct fetch error, preserved in local cache:', err);
+    return updatedLocal;
   }
 }
 
-export function saveLocalWallet(wallet: StoreWallet) {
+export async function deleteProduct(id: string): Promise<void> {
+  const localList = getLocalProducts().filter((p) => String(p.id) !== String(id));
+  saveLocalProducts(localList);
+  saveLocalImage(id, null);
+
   try {
-    localStorage.setItem(WALLET_CACHE_KEY, JSON.stringify(wallet));
-  } catch (e) {
-    console.warn('Local storage save wallet note:', e);
+    const { error } = await supabase
+      .from('products')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.warn('Supabase delete product note:', error.message);
+    }
+  } catch (err) {
+    console.warn('deleteProduct fetch note:', err);
   }
 }
 
-export function getLocalExpenses(): Expense[] {
+export async function adjustProductStock(id: string, deltaStock: number): Promise<void> {
+  const localList = getLocalProducts();
+  const idx = localList.findIndex((p) => String(p.id) === String(id));
+  const productUnit = idx >= 0 ? localList[idx].unit : undefined;
+  if (idx >= 0) {
+    localList[idx].stock_kg = roundStock(Math.max(0, (localList[idx].stock_kg || 0) + deltaStock), productUnit);
+    saveLocalProducts(localList);
+  }
+
   try {
-    const raw = localStorage.getItem(EXPENSES_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
+    const { data: current, error: fetchErr } = await supabase
+      .from('products')
+      .select('stock_kg, unit')
+      .eq('id', id)
+      .single();
+
+    if (!fetchErr && current) {
+      const newStock = roundStock(Math.max(0, Number(current.stock_kg || 0) + deltaStock), current.unit || productUnit);
+      await supabase
+        .from('products')
+        .update({ stock_kg: newStock })
+        .eq('id', id);
+    }
+  } catch (err) {
+    console.warn('adjustProductStock note:', err);
   }
 }
 
-export function saveLocalExpenses(expenses: Expense[]) {
-  try {
-    localStorage.setItem(EXPENSES_CACHE_KEY, JSON.stringify(expenses));
-  } catch (e) {
-    console.warn('Local storage save expenses note:', e);
-  }
-}
-
-export function getLocalOrders(): Order[] {
-  try {
-    const raw = localStorage.getItem(ORDERS_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveLocalOrders(orders: Order[]) {
-  try {
-    localStorage.setItem(ORDERS_CACHE_KEY, JSON.stringify(orders));
-  } catch (e) {
-    console.warn('Local storage save orders note:', e);
-  }
-}
-
-export function getLocalSales(): Sale[] {
+function getLocalSales(): Sale[] {
   try {
     const raw = localStorage.getItem(SALES_CACHE_KEY);
     return raw ? JSON.parse(raw) : [];
@@ -143,7 +365,7 @@ export function getLocalSales(): Sale[] {
   }
 }
 
-export function saveLocalSales(sales: Sale[]) {
+function saveLocalSales(sales: Sale[]) {
   try {
     localStorage.setItem(SALES_CACHE_KEY, JSON.stringify(sales));
   } catch (e) {
@@ -202,188 +424,6 @@ export function saveLocalCashFlow(entries: CashFlowEntry[]) {
   }
 }
 
-// ==================== PRODUCTS ====================
-
-export async function fetchProducts(): Promise<Product[]> {
-  const localMap = getLocalImageMap();
-  try {
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .order('name', { ascending: true });
-
-    if (error) {
-      console.warn('Supabase fetch products returned error, using local cache:', error.message);
-      return getLocalProducts();
-    }
-
-    const processed: Product[] = (data || []).map((p: any) => {
-      const dbImg = p.image_url || p.image || null;
-      const cachedImg = localMap[p.id] || null;
-      let chosenImg = (dbImg && !dbImg.startsWith('blob:')) 
-        ? dbImg 
-        : (cachedImg && !cachedImg.startsWith('blob:') ? cachedImg : null);
-
-      if (chosenImg && chosenImg.includes('kquxfvcbgogjpthhsseg')) {
-        chosenImg = chosenImg.replace('kquxfvcbgogjpthhsseg.supabase.co', 'bjogkxquvqgikypjpmkz.supabase.co');
-      }
-      if (chosenImg && chosenImg.includes(' ') && !chosenImg.includes('%20')) {
-        const urlParts = chosenImg.split('/products/');
-        if (urlParts.length === 2) {
-          chosenImg = `${urlParts[0]}/products/${encodeURIComponent(urlParts[1])}`;
-        }
-      }
-
-      // Robust Parsing variants_json agar selalu terbaca sebagai Array di Kasir
-      let variants: ProductVariant[] = [];
-      if (p.variants_json) {
-        if (Array.isArray(p.variants_json)) {
-          variants = p.variants_json;
-        } else if (typeof p.variants_json === 'string') {
-          try {
-            const parsed = JSON.parse(p.variants_json);
-            if (Array.isArray(parsed)) variants = parsed;
-          } catch {
-            variants = [];
-          }
-        }
-      }
-
-      return {
-        ...p,
-        image_url: chosenImg,
-        variants_json: variants,
-        stock_kg: typeof p.stock_kg === 'number' ? roundStock(p.stock_kg, p.unit) : p.stock_kg,
-        min_stock: typeof p.min_stock === 'number' ? roundStock(p.min_stock, p.unit) : p.min_stock,
-      };
-    });
-
-    saveLocalProducts(processed);
-    return processed;
-  } catch (err: any) {
-    console.warn('fetchProducts network error, falling back to cache:', err);
-    return getLocalProducts();
-  }
-}
-
-export async function createProduct(product: Omit<Product, 'id'>): Promise<Product> {
-  const cleanImageUrl = product.image_url && !product.image_url.startsWith('blob:') ? product.image_url : null;
-  const cleanVariants = Array.isArray(product.variants_json) ? product.variants_json : [];
-  
-  const cleanPayload = {
-    ...product,
-    image_url: cleanImageUrl,
-    variants_json: cleanVariants,
-    stock_kg: roundStock(Number(product.stock_kg) || 0, product.unit),
-    min_stock: roundStock(Number(product.min_stock) || 0, product.unit),
-  };
-
-  const tempId = `prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const localProduct: Product = {
-    id: tempId,
-    ...cleanPayload,
-    image_url: cleanImageUrl,
-  };
-
-  if (cleanImageUrl) {
-    saveLocalImage(tempId, cleanImageUrl);
-  }
-
-  saveLocalProducts([localProduct, ...getLocalProducts()]);
-
-  try {
-    const { data, error } = await supabase
-      .from('products')
-      .insert([cleanPayload])
-      .select()
-      .single();
-
-    if (error) {
-      return localProduct;
-    }
-
-    const finalImageUrl = data.image_url || cleanImageUrl;
-    if (finalImageUrl) saveLocalImage(data.id, finalImageUrl);
-    return { ...data, image_url: finalImageUrl, variants_json: cleanVariants };
-  } catch (err) {
-    return localProduct;
-  }
-}
-
-export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product> {
-  const cleanUpdates = { ...updates };
-  if (cleanUpdates.stock_kg !== undefined) {
-    cleanUpdates.stock_kg = roundStock(Number(cleanUpdates.stock_kg) || 0, cleanUpdates.unit);
-  }
-  if (cleanUpdates.min_stock !== undefined) {
-    cleanUpdates.min_stock = roundStock(Number(cleanUpdates.min_stock) || 0, cleanUpdates.unit);
-  }
-
-  if ('image_url' in cleanUpdates) {
-    if (cleanUpdates.image_url && cleanUpdates.image_url.startsWith('blob:')) {
-      cleanUpdates.image_url = null;
-    }
-    saveLocalImage(id, cleanUpdates.image_url || null);
-  }
-
-  const localList = getLocalProducts();
-  const idx = localList.findIndex((p) => String(p.id) === String(id));
-  let updatedLocal: Product = idx >= 0 ? { ...localList[idx], ...cleanUpdates } : ({ id, ...cleanUpdates } as Product);
-  if (idx >= 0) {
-    localList[idx] = updatedLocal;
-    saveLocalProducts(localList);
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('products')
-      .update(cleanUpdates)
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) return updatedLocal;
-    return data;
-  } catch (err) {
-    return updatedLocal;
-  }
-}
-
-export async function deleteProduct(id: string): Promise<void> {
-  saveLocalProducts(getLocalProducts().filter((p) => String(p.id) !== String(id)));
-  saveLocalImage(id, null);
-  try {
-    await supabase.from('products').delete().eq('id', id);
-  } catch (err) {
-    console.warn('deleteProduct note:', err);
-  }
-}
-
-export async function adjustProductStock(id: string, deltaStock: number): Promise<void> {
-  const localList = getLocalProducts();
-  const idx = localList.findIndex((p) => String(p.id) === String(id));
-  const productUnit = idx >= 0 ? localList[idx].unit : undefined;
-  if (idx >= 0) {
-    localList[idx].stock_kg = roundStock(Math.max(0, (localList[idx].stock_kg || 0) + deltaStock), productUnit);
-    saveLocalProducts(localList);
-  }
-
-  try {
-    const { data: current } = await supabase
-      .from('products')
-      .select('stock_kg, unit')
-      .eq('id', id)
-      .single();
-
-    if (current) {
-      const newStock = roundStock(Math.max(0, Number(current.stock_kg || 0) + deltaStock), current.unit || productUnit);
-      await supabase.from('products').update({ stock_kg: newStock }).eq('id', id);
-    }
-  } catch (err) {
-    console.warn('adjustProductStock note:', err);
-  }
-}
-
 // ==================== SALES & SALE ITEMS ====================
 
 export interface CheckoutPayload {
@@ -400,19 +440,13 @@ export interface CheckoutPayload {
     unit: string;
     subtotal: number;
   }[];
+  // If payment_method is UTANG
   debt_due_date?: string;
 }
 
 export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sale; items: SaleItem[] }> {
-  const generatedUuid = typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0;
-        const v = c === 'x' ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-      });
-  const tempSaleId = generatedUuid;
-
+  const tempSaleId = `sale_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  
   const constructedItems: SaleItem[] = payload.items.map((item, idx) => ({
     id: `item_${Date.now()}_${idx}`,
     sale_id: tempSaleId,
@@ -442,28 +476,18 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
     customer_phone: payload.customer_phone,
   };
 
-  const localProducts = getLocalProducts();
-  const updatedLocalProducts = localProducts.map((p) => {
-    const boughtItem = payload.items.find((it) => String(it.product.id) === String(p.id));
-    if (boughtItem) {
-      const itemUnit = boughtItem.unit || p.unit;
-      const currentVal = typeof p.stock_kg === 'number' ? p.stock_kg : Number(p.stock_kg) || 0;
-      const deducted = roundStock(Math.max(0, currentVal - boughtItem.qty), itemUnit);
-      return { ...p, stock_kg: deducted };
-    }
-    return p;
-  });
-  saveLocalProducts(updatedLocalProducts);
-  saveLocalSales([localSale, ...getLocalSales()]);
+  // Pre-save to local sales cache
+  const cachedSales = getLocalSales();
+  saveLocalSales([localSale, ...cachedSales]);
 
   let finalSale = localSale;
   let finalItems = constructedItems;
 
   try {
+    // 1. Insert into sales
     const { data: saleData, error: saleError } = await supabase
       .from('sales')
       .insert([{
-        id: generatedUuid,
         total_amount: payload.total_amount,
         payment_method: payload.payment_method,
         status: payload.payment_method === 'UTANG' ? 'unpaid' : 'paid',
@@ -482,7 +506,17 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         customer_name: payload.customer_name,
       };
 
-      const saleItemsPayload = payload.items.map((item) => ({
+      // 2. Insert into sale_items (dengan fallback aman jika kolom tertentu belum ada di tabel Supabase)
+      const baseSaleItems = payload.items.map(item => ({
+        sale_id: saleData.id,
+        product_id: item.product.id,
+        qty_kg: item.qty,
+        subtotal: item.subtotal,
+        cost_price: item.product.cost_price || 0,
+      }));
+
+      // Coba insert dengan field lengkap
+      const fullSaleItems = payload.items.map(item => ({
         sale_id: saleData.id,
         product_id: item.product.id,
         qty_kg: item.qty,
@@ -490,79 +524,117 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         cost_price: item.product.cost_price || 0,
         original_qty: item.qty,
         unit: item.unit || item.product.unit || 'kg',
-        custom_subtotal: item.subtotal,
       }));
 
-      const { data: insertedItems } = await supabase
+      let { data: insertedItems, error: itemInsertErr } = await supabase
         .from('sale_items')
-        .insert(saleItemsPayload)
+        .insert(fullSaleItems)
         .select();
+
+      if (itemInsertErr) {
+        console.warn('Full sale_items insert failed, falling back to base columns:', itemInsertErr.message);
+        const { data: baseItems, error: baseErr } = await supabase
+          .from('sale_items')
+          .insert(baseSaleItems)
+          .select();
+        if (!baseErr && baseItems) {
+          insertedItems = baseItems;
+        }
+      }
 
       if (insertedItems && insertedItems.length > 0) {
         finalItems = insertedItems.map((ins, idx) => ({
           ...ins,
           qty: ins.qty_kg || ins.original_qty || payload.items[idx]?.qty || 1,
+          unit: ins.unit || payload.items[idx]?.unit || payload.items[idx]?.product?.unit || 'pcs',
           product: payload.items[idx]?.product,
         }));
         finalSale.items = finalItems;
         finalSale.sale_items = finalItems;
       }
 
-      saveLocalSales(getLocalSales().map((s) => (s.id === tempSaleId ? finalSale : s)));
+      // Update cache with real Supabase sale ID
+      const updatedList = getLocalSales().map((s) => (s.id === tempSaleId ? finalSale : s));
+      saveLocalSales(updatedList);
 
+      // 3. Deduct stock for each product
       for (const item of payload.items) {
         try {
           const itemUnit = item.unit || item.product.unit;
-          const { data: currentProd } = await supabase
+          const newStock = roundStock(Math.max(0, (item.product.stock_kg || 0) - item.qty), itemUnit);
+          await supabase
             .from('products')
-            .select('stock_kg, unit')
-            .eq('id', item.product.id)
-            .single();
-
-          const currentStock = currentProd && typeof currentProd.stock_kg === 'number'
-            ? currentProd.stock_kg
-            : Number(item.product.stock_kg) || 0;
-
-          const newStock = roundStock(Math.max(0, currentStock - item.qty), itemUnit || currentProd?.unit);
-          await supabase.from('products').update({ stock_kg: newStock }).eq('id', item.product.id);
+            .update({ stock_kg: newStock })
+            .eq('id', item.product.id);
         } catch (stockErr) {
-          console.warn('Failed stock deduction for', item.product.name, stockErr);
+          console.warn('Failed to update product stock for', item.product.name, stockErr);
         }
       }
 
+      // 4. If payment is UTANG, also create record in debts_credits
       if (payload.payment_method === 'UTANG') {
+        const debtPayload = {
+          type: 'PIUTANG',
+          customer_or_supplier_name: payload.customer_name || 'Pelanggan Utang',
+          phone_number: payload.customer_phone || null,
+          total_amount: payload.total_amount,
+          remaining_amount: payload.total_amount,
+          status: 'unpaid' as const,
+          due_date: payload.debt_due_date || null,
+          notes: `Transaksi kasir ${saleData?.id ? saleData.id.slice(0, 8) : tempSaleId.slice(0, 8)}`,
+        };
         try {
-          await createDebtCredit({
-            type: 'PIUTANG',
-            customer_or_supplier_name: payload.customer_name || 'Pelanggan Utang',
-            phone_number: payload.customer_phone || null,
-            total_amount: payload.total_amount,
-            remaining_amount: payload.total_amount,
-            status: 'unpaid',
-            due_date: payload.debt_due_date || null,
-            notes: `Transaksi kasir ${saleData?.id ? saleData.id.slice(0, 8) : tempSaleId.slice(0, 8)}`,
-          });
+          await createDebtCredit(debtPayload);
         } catch (debtErr) {
-          console.warn('createDebtCredit note:', debtErr);
+          console.warn('Failed to create remote debt record, fallback preserved locally:', debtErr);
         }
       }
     }
   } catch (err) {
-    console.warn('processSale remote write exception, cached locally:', err);
+    console.warn('processSale Supabase write exception, using local store:', err);
+  }
+
+  // Guarantee UTANG is preserved in local debts cache even if Supabase had an exception
+  if (payload.payment_method === 'UTANG') {
+    const existingDebts = getLocalDebts();
+    const noteTag = (finalSale?.id || tempSaleId).slice(0, 8);
+    const alreadySaved = existingDebts.some((d) => d && d.notes?.includes(noteTag));
+    if (!alreadySaved) {
+      const fallbackDebt: DebtCredit = {
+        id: `debt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        type: 'PIUTANG',
+        customer_or_supplier_name: payload.customer_name || 'Pelanggan Utang',
+        phone_number: payload.customer_phone || null,
+        total_amount: payload.total_amount,
+        remaining_amount: payload.total_amount,
+        status: 'unpaid',
+        due_date: payload.debt_due_date || null,
+        notes: `Transaksi kasir ${noteTag}`,
+        created_at: new Date().toISOString(),
+      };
+      saveLocalDebts([fallbackDebt, ...existingDebts]);
+    }
   }
 
   return {
-    sale: finalSale,
-    items: finalItems,
+    sale: {
+      ...finalSale,
+      id: finalSale?.id || tempSaleId,
+      customer_name: finalSale?.customer_name || payload.customer_name || (payload.payment_method === 'UTANG' ? 'Pelanggan Utang' : undefined),
+      items: finalItems || constructedItems || [],
+      sale_items: finalItems || constructedItems || [],
+      total_amount: Number(finalSale?.total_amount ?? payload.total_amount ?? 0),
+      payment_method: finalSale?.payment_method || payload.payment_method || 'CASH',
+    },
+    items: finalItems || constructedItems || [],
   };
 }
 
-// IN-MEMORY ENRICHMENT: Memastikan Rincian Pembelian di Laporan Muncul 100%
 export async function fetchSales(): Promise<Sale[]> {
   const localCached = getLocalSales();
   const localProducts = getLocalProducts();
   const productMap: Record<string, Product> = {};
-  localProducts.forEach((p) => { productMap[p.id] = p; });
+  localProducts.forEach(p => { productMap[p.id] = p; });
 
   try {
     const { data: salesData, error: salesError } = await supabase
@@ -571,21 +643,23 @@ export async function fetchSales(): Promise<Sale[]> {
       .order('created_at', { ascending: false });
 
     if (salesError || !salesData) {
-      return localCached.length > 0 ? localCached : [];
+      if (localCached.length > 0) return localCached;
+      return [];
     }
 
-    let allSaleItems: any[] = [];
+    // Ambil seluruh sale_items tanpa join agar aman 100% dari skema constraint / PGRST200
+    let allItems: any[] = [];
     try {
       const { data: itemsData } = await supabase
         .from('sale_items')
         .select('*');
-      allSaleItems = itemsData || [];
-    } catch (itErr) {
-      console.warn('fetch sale_items separated note:', itErr);
+      allItems = itemsData || [];
+    } catch (itemFetchErr) {
+      console.warn('Separate sale_items fetch error:', itemFetchErr);
     }
 
     const itemsBySaleId: Record<string, SaleItem[]> = {};
-    for (const it of allSaleItems) {
+    for (const it of allItems) {
       if (!itemsBySaleId[it.sale_id]) itemsBySaleId[it.sale_id] = [];
       const prod = productMap[it.product_id] || {
         id: it.product_id,
@@ -609,16 +683,19 @@ export async function fetchSales(): Promise<Sale[]> {
         subtotal: Number(it.subtotal) || 0,
         cost_price: Number(it.cost_price) || 0,
         original_qty: Number(it.original_qty) || Number(it.qty_kg) || 1,
-        unit: it.unit || prod.unit || 'kg',
+        unit: it.unit || prod?.unit || 'kg',
         product: prod,
       });
     }
 
-    const normalizedSales: Sale[] = salesData.map((sale: any) => {
-      const cachedMatch = localCached.find((c) => c.id === sale.id);
-      const items = itemsBySaleId[sale.id] || cachedMatch?.items || cachedMatch?.sale_items || [];
+    const mergedSales: Sale[] = salesData.map(s => {
+      const cachedMatch = localCached.find(c => c.id === s.id);
+      const items = (itemsBySaleId[s.id] && itemsBySaleId[s.id].length > 0)
+        ? itemsBySaleId[s.id]
+        : (cachedMatch?.items || cachedMatch?.sale_items || []);
+
       return {
-        ...sale,
+        ...s,
         items,
         sale_items: items,
         cash_received: cachedMatch?.cash_received,
@@ -627,9 +704,18 @@ export async function fetchSales(): Promise<Sale[]> {
       };
     });
 
-    saveLocalSales(normalizedSales);
-    return normalizedSales;
-  } catch (err) {
+    // Auto sync status utang jika ada perubahan status di debts_credits
+    const cachedDebts = getLocalDebts();
+    const syncedSales = mergedSales.map((s) => {
+      if ((s.payment_method || '').toUpperCase() !== 'UTANG') return s;
+      const info = getSaleDebtInfo(s, cachedDebts);
+      const targetStatus = info.isLunas ? 'paid' : (info.isPartial ? 'partial' : 'unpaid');
+      return s.status !== targetStatus ? { ...s, status: targetStatus } : s;
+    });
+
+    saveLocalSales(syncedSales);
+    return syncedSales;
+  } catch (err: any) {
     console.warn('fetchSales exception, fallback to local cache:', err);
     return localCached;
   }
@@ -639,7 +725,19 @@ export async function fetchSalesByDateRange(startDateISO: string, endDateISO: st
   try {
     const { data, error } = await supabase
       .from('sales')
-      .select('*')
+      .select(`
+        *,
+        sale_items (
+          id,
+          sale_id,
+          product_id,
+          qty_kg,
+          subtotal,
+          cost_price,
+          unit,
+          product:products (id, name, unit, selling_price, cost_price, image_url, category, barcode)
+        )
+      `)
       .gte('created_at', startDateISO)
       .lte('created_at', endDateISO)
       .order('created_at', { ascending: false });
@@ -648,13 +746,13 @@ export async function fetchSalesByDateRange(startDateISO: string, endDateISO: st
       return data as Sale[];
     }
   } catch (err) {
-    console.warn('fetchSalesByDateRange fallback to local filtering:', err);
+    console.warn('fetchSalesByDateRange fallback to local cache filtering:', err);
   }
 
   const allSales = await fetchSales();
   const start = new Date(startDateISO).getTime();
   const end = new Date(endDateISO).getTime();
-  return allSales.filter((s) => {
+  return allSales.filter(s => {
     const t = new Date(s.created_at).getTime();
     return t >= start && t <= end;
   });
@@ -670,6 +768,11 @@ export interface DeleteSaleItemResult {
   error?: string;
 }
 
+/**
+ * Hapus item tertentu dari riwayat transaksi penjualan (sales & sale_items),
+ * dengan opsi mengembalikan stok produk ke database/cache, serta sinkronisasi
+ * total belanja dan catatan utang jika metode pembayaran adalah BON/UTANG.
+ */
 export async function deleteSaleItem(
   saleId: string,
   itemId: string,
@@ -680,23 +783,68 @@ export async function deleteSaleItem(
 ): Promise<DeleteSaleItemResult> {
   try {
     const localSales = getLocalSales();
-    const existingSale = localSales.find((s) => s.id === saleId);
+    const existingSale = localSales.find(s => s.id === saleId);
     const existingItems = existingSale?.items || existingSale?.sale_items || [];
-
-    const targetItem = existingItems.find(
-      (it) => (itemId && it.id === itemId) || (productId && it.product_id === productId)
+    
+    // Temukan data item yang akan dihapus
+    const targetItem = existingItems.find(it => 
+      (itemId && it.id === itemId) || 
+      (productId && it.product_id === productId)
     );
-
+    
     const prodName = targetItem?.product?.name || 'Produk';
     const prodUnit = targetItem?.unit || targetItem?.product?.unit || 'pcs';
     const actualQty = qtyToRestore || Number(targetItem?.qty_kg || targetItem?.qty || 1);
+    const actualSubtotal = subtotalToDeduct || Number(targetItem?.subtotal || 0);
 
+    // 1. Hapus record item dari tabel sale_items Supabase
+    let deletedFromDb = false;
     if (itemId && !itemId.startsWith('item_modal_') && !itemId.startsWith('item_temp_')) {
-      await supabase.from('sale_items').delete().eq('id', itemId);
-    } else if (saleId && productId) {
-      await supabase.from('sale_items').delete().eq('sale_id', saleId).eq('product_id', productId);
+      const { error: delErr } = await supabase
+        .from('sale_items')
+        .delete()
+        .eq('id', itemId);
+      if (!delErr) {
+        deletedFromDb = true;
+      }
+    }
+    if (!deletedFromDb && saleId && productId) {
+      await supabase
+        .from('sale_items')
+        .delete()
+        .eq('sale_id', saleId)
+        .eq('product_id', productId);
     }
 
+    // 2. Jika transaksi ini berasal dari pesanan online, perbarui items_json & total_amount di tabel orders
+    if (existingSale) {
+      const orderMatch = (existingSale.notes || '').match(/#ORD-(\d+)/i) || 
+                         (existingSale.notes || '').match(/ORD-(\d+)/i) || 
+                         existingSale.id.match(/sale_online_(\d+)/i);
+      if (orderMatch && orderMatch[1]) {
+        try {
+          const orderId = Number(orderMatch[1]);
+          const { data: ord } = await supabase.from('orders').select('*').eq('id', orderId).single();
+          if (ord && ord.items_json) {
+            let raw: any[] = [];
+            if (Array.isArray(ord.items_json)) raw = ord.items_json;
+            else if (typeof ord.items_json === 'string') {
+              try { raw = JSON.parse(ord.items_json); } catch {}
+            }
+            const filteredOrdItems = raw.filter((it: any) => String(it.product_id || it.id) !== String(productId));
+            const newOrdTotal = filteredOrdItems.reduce((acc: number, it: any) => acc + Number(it.subtotal || (Number(it.price || 0) * Number(it.qty || it.quantity || 1))), 0);
+            await supabase.from('orders').update({
+              items_json: filteredOrdItems,
+              total_amount: newOrdTotal
+            }).eq('id', orderId);
+          }
+        } catch (ordErr) {
+          console.warn('Sync order items error on delete:', ordErr);
+        }
+      }
+    }
+
+    // 3. Kembalikan stok produk jika diminta
     if (restoreStock && productId) {
       try {
         const { data: prodData } = await supabase
@@ -704,37 +852,114 @@ export async function deleteSaleItem(
           .select('stock_kg, unit')
           .eq('id', productId)
           .single();
+
         if (prodData) {
           const newStock = roundStock((prodData.stock_kg || 0) + actualQty, prodData.unit);
-          await supabase.from('products').update({ stock_kg: newStock }).eq('id', productId);
+          await supabase
+            .from('products')
+            .update({ stock_kg: newStock })
+            .eq('id', productId);
         }
-      } catch (e) {}
+      } catch (stockErr) {
+        console.warn('Failed to restore Supabase stock:', stockErr);
+      }
 
+      // Perbarui cache produk lokal
       const localProds = getLocalProducts();
-      saveLocalProducts(
-        localProds.map((p) => (p.id === productId ? { ...p, stock_kg: roundStock((p.stock_kg || 0) + actualQty, p.unit) } : p))
-      );
+      const updatedProds = localProds.map(p => {
+        if (p.id === productId) {
+          return { ...p, stock_kg: roundStock((p.stock_kg || 0) + actualQty, p.unit) };
+        }
+        return p;
+      });
+      saveLocalProducts(updatedProds);
     }
 
-    const remainingItems = existingItems.filter(
-      (it) => !((itemId && it.id === itemId) || (productId && it.product_id === productId))
+    // 4. Hitung ulang total belanja transaksi
+    const remainingItems = existingItems.filter(it => 
+      !((itemId && it.id === itemId) || (productId && it.product_id === productId))
     );
     const newTotal = Math.max(0, remainingItems.reduce((acc, it) => acc + Number(it.subtotal || 0), 0));
-
+    
     try {
-      await supabase.from('sales').update({ total_amount: newTotal }).eq('id', saleId);
-    } catch (e) {}
+      await supabase
+        .from('sales')
+        .update({ total_amount: newTotal })
+        .eq('id', saleId);
+    } catch (saleUpdateErr) {
+      console.warn('Failed to update sale total in Supabase:', saleUpdateErr);
+    }
 
+    // 5. Jika metode pembayaran adalah UTANG / BON, sinkronkan catatan piutang
+    if (existingSale?.payment_method === 'UTANG') {
+      const noteTag = saleId.slice(0, 8);
+      try {
+        const { data: matchingDebts } = await supabase
+          .from('debts_credits')
+          .select('*')
+          .ilike('notes', `%${noteTag}%`);
+
+        if (matchingDebts && matchingDebts.length > 0) {
+          for (const d of matchingDebts) {
+            const newRemaining = Math.max(0, (Number(d.remaining_amount) || 0) - actualSubtotal);
+            const newTotalDebt = Math.max(0, (Number(d.total_amount) || 0) - actualSubtotal);
+            await supabase
+              .from('debts_credits')
+              .update({
+                remaining_amount: newRemaining,
+                total_amount: newTotalDebt,
+                status: newRemaining === 0 ? 'paid' : d.status,
+              })
+              .eq('id', d.id);
+          }
+        }
+      } catch (debtErr) {
+        console.warn('Failed to sync debts on sale item delete:', debtErr);
+      }
+
+      // Perbarui cache buku utang lokal
+      const localDebts = getLocalDebts();
+      const updatedDebts = localDebts.map(d => {
+        if (d.notes?.includes(noteTag)) {
+          const newRemaining = Math.max(0, (Number(d.remaining_amount) || 0) - actualSubtotal);
+          const newTotalDebt = Math.max(0, (Number(d.total_amount) || 0) - actualSubtotal);
+          return {
+            ...d,
+            remaining_amount: newRemaining,
+            total_amount: newTotalDebt,
+            status: (newRemaining === 0 ? 'paid' : d.status) as any,
+          };
+        }
+        return d;
+      });
+      saveLocalDebts(updatedDebts);
+    }
+
+    // 6. Simpan pembaruan ke cache transaksi lokal
     let updatedSale: Sale | undefined;
-    const updatedSales = localSales.map((s) => {
+    const updatedSales = localSales.map(s => {
       if (s.id === saleId) {
-        const up: Sale = { ...s, total_amount: newTotal, items: remainingItems, sale_items: remainingItems };
+        const up: Sale = {
+          ...s,
+          total_amount: newTotal,
+          items: remainingItems,
+          sale_items: remainingItems,
+        };
         updatedSale = up;
         return up;
       }
       return s;
     });
     saveLocalSales(updatedSales);
+
+    if (!updatedSale && existingSale) {
+      updatedSale = {
+        ...existingSale,
+        total_amount: newTotal,
+        items: remainingItems,
+        sale_items: remainingItems,
+      };
+    }
 
     return {
       success: true,
@@ -745,7 +970,11 @@ export async function deleteSaleItem(
       newTotalAmount: newTotal,
     };
   } catch (err: any) {
-    return { success: false, error: err.message || 'Gagal menghapus item transaksi' };
+    console.error('deleteSaleItem error:', err);
+    return {
+      success: false,
+      error: err.message || 'Gagal menghapus item transaksi',
+    };
   }
 }
 
@@ -758,10 +987,32 @@ export async function fetchExpenses(): Promise<Expense[]> {
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) return getLocalExpenses();
-    saveLocalExpenses(data || []);
-    return data || [];
+    if (error) {
+      console.warn('Error fetching expenses, using local cache:', error.message);
+      return getLocalExpenses();
+    }
+
+    const expensesList = (data || []).map((exp: any) => {
+      let source = exp.source;
+      if (!source) {
+        const cat = (exp.category || '').toUpperCase();
+        const title = (exp.title || '').toUpperCase();
+        if (cat.includes('KAS BESAR') || title.includes('KAS BESAR') || cat.includes('CADANGAN')) {
+          source = 'KAS_BESAR';
+        } else {
+          source = 'LACI';
+        }
+      }
+      return {
+        ...exp,
+        source,
+      };
+    });
+
+    saveLocalExpenses(expensesList);
+    return expensesList;
   } catch (err) {
+    console.warn('Network exception fetching expenses, using local cache:', err);
     return getLocalExpenses();
   }
 }
@@ -781,7 +1032,9 @@ export async function createExpense(expense: { title: string; amount: number; ca
     .single();
 
   if (error) {
+    // If column 'source' does not exist in the database table schema, fallback
     if (error.message && (error.message.toLowerCase().includes('source') || error.message.toLowerCase().includes('column'))) {
+      console.warn('Fallback: column source not found in expenses table, saving without source column');
       const fallbackExpense = {
         title: expense.title,
         amount: expense.amount,
@@ -795,17 +1048,404 @@ export async function createExpense(expense: { title: string; amount: number; ca
       if (fbErr) throw fbErr;
       return { ...fbData, source: expense.source || 'LACI' };
     }
+    console.error('Error creating expense:', error);
     throw error;
   }
   return data;
 }
 
-export async function deleteExpense(id: string): Promise<void> {
-  try {
-    await supabase.from('expenses').delete().eq('id', id);
-  } catch (err) {
-    console.warn('deleteExpense note:', err);
+export async function updateExpense(id: string, updates: Partial<Expense>): Promise<Expense> {
+  const { source, ...safeUpdates } = updates as any;
+  const { data, error } = await supabase
+    .from('expenses')
+    .update(safeUpdates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating expense:', error);
+    throw error;
   }
+  return { ...data, source: source || (data as any)?.source || 'LACI' };
+}
+
+export async function deleteExpense(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('expenses')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting expense:', error);
+    throw error;
+  }
+}
+
+
+// ==================== ORDERS ====================
+
+export async function fetchOrders(): Promise<Order[]> {
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('Error fetching orders, using local cache:', error.message);
+      return getLocalOrders();
+    }
+    const ordersList = data || [];
+    saveLocalOrders(ordersList);
+    return ordersList;
+  } catch (err) {
+    console.warn('Network exception fetching orders, using local cache:', err);
+    return getLocalOrders();
+  }
+}
+
+export async function processOnlineSaleToReports(order: Order): Promise<Sale | null> {
+  try {
+    const orderIdStr = `#ORD-${order.id}`;
+    // Preserve original payment method: COD, TRANSFER, QRIS, etc.
+    const rawPaymentMethod = order.payment_method || 'COD';
+    const paymentMethodUpper = rawPaymentMethod.toUpperCase();
+    const isCash = paymentMethodUpper.includes('COD') || paymentMethodUpper.includes('TUNAI') || paymentMethodUpper === 'CASH' || paymentMethodUpper.includes('BAYAR DI TEMPAT');
+
+    // Parse items safely with fallbacks from multiple possible fields
+    let rawItems: any[] = [];
+    if (Array.isArray(order.items_json)) {
+      rawItems = order.items_json;
+    } else if (typeof order.items_json === 'string' && order.items_json.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(order.items_json);
+        rawItems = Array.isArray(parsed) ? parsed : (parsed.items || []);
+      } catch {
+        rawItems = [];
+      }
+    } else if (Array.isArray((order as any).items)) {
+      rawItems = (order as any).items;
+    } else if (Array.isArray((order as any).order_items)) {
+      rawItems = (order as any).order_items;
+    }
+
+    // Fallback if rawItems is somehow empty
+    if (rawItems.length === 0) {
+      rawItems = [{
+        product_id: `prod_online_${order.id}`,
+        name: `Belanjaan Pesanan Online #${order.id}`,
+        product_name: `Belanjaan Pesanan Online #${order.id}`,
+        qty: 1,
+        unit: 'Paket',
+        price: Number(order.total_amount) || 0,
+        subtotal: Number(order.total_amount) || 0,
+      }];
+    }
+
+    const localProducts = getLocalProducts();
+    const productMap: Record<string, Product> = {};
+    localProducts.forEach(p => { productMap[p.id] = p; });
+
+    const tempSaleId = `sale_online_${order.id}`;
+    const orderTimestamp = order.created_at || new Date().toISOString();
+
+    const constructedItems: SaleItem[] = rawItems.map((item: any, idx: number) => {
+      const prodId = item.product_id || item.productId || item.id || `prod_${idx}`;
+      const prodName = item.product_name || item.name || item.title || 'Barang Sembako';
+      const qty = Number(item.qty || item.quantity || item.amount || item.qty_kg || 1);
+      const unit = item.unit || item.satuan || 'pcs';
+      const price = Number(item.price || item.selling_price || item.unit_price || (item.subtotal ? item.subtotal / qty : 0));
+      const subtotal = Number(item.subtotal || (price * qty) || (price * qty) || 0);
+      const costPrice = Number(item.cost_price) || (price * 0.8);
+
+      const foundProd = productMap[prodId] || {
+        id: String(prodId),
+        name: prodName,
+        category: 'Sembako',
+        cost_price: costPrice,
+        selling_price: price,
+        stock_kg: 100,
+        min_stock: 10,
+        is_active: true,
+        image_url: item.image_url || null,
+        unit: unit,
+        barcode: null
+      };
+
+      return {
+        id: `item_online_${order.id}_${idx}`,
+        sale_id: tempSaleId,
+        product_id: String(prodId),
+        qty_kg: qty,
+        subtotal: subtotal,
+        cost_price: Number(foundProd.cost_price) || costPrice,
+        original_qty: qty,
+        unit: unit || foundProd.unit || 'pcs',
+        custom_subtotal: subtotal,
+        product: {
+          ...foundProd,
+          name: prodName || foundProd.name,
+          selling_price: price || foundProd.selling_price,
+          unit: unit || foundProd.unit
+        }
+      };
+    });
+
+    const localSale: Sale = {
+      id: tempSaleId,
+      total_amount: Number(order.total_amount) || 0,
+      payment_method: rawPaymentMethod,
+      status: 'COMPLETED',
+      created_at: orderTimestamp,
+      notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'} (${order.delivery_address || ''})`,
+      items: constructedItems,
+      sale_items: constructedItems,
+      cash_received: isCash ? Number(order.total_amount) : 0,
+      change_amount: 0,
+      customer_name: order.customer_name,
+      customer_phone: order.customer_phone
+    };
+
+    // Check existing in local cache
+    const cachedSales = getLocalSales();
+    const existingIndex = cachedSales.findIndex(s => s.notes?.includes(orderIdStr) || s.id === tempSaleId || s.id.startsWith(`sale_online_${order.id}`));
+    if (existingIndex >= 0) {
+      cachedSales[existingIndex] = {
+        ...cachedSales[existingIndex],
+        ...localSale,
+        payment_method: rawPaymentMethod,
+        created_at: cachedSales[existingIndex].created_at || orderTimestamp,
+        items: constructedItems,
+        sale_items: constructedItems,
+      };
+      saveLocalSales([...cachedSales]);
+    } else {
+      saveLocalSales([localSale, ...cachedSales]);
+    }
+
+    // Try inserting into Supabase sales & sale_items tables (with deduplication & repair check)
+    try {
+      const { data: existingDbSales } = await supabase
+        .from('sales')
+        .select('id, notes, created_at, payment_method')
+        .like('notes', `%${orderIdStr}%`)
+        .limit(1);
+
+      if (existingDbSales && existingDbSales.length > 0) {
+        const existingSaleId = existingDbSales[0].id;
+        
+        // Ensure missing sale_items are saved to DB
+        try {
+          const { data: existingDbItems } = await supabase
+            .from('sale_items')
+            .select('id')
+            .eq('sale_id', existingSaleId);
+
+          if (!existingDbItems || existingDbItems.length === 0) {
+            const itemsPayload = constructedItems.map(it => ({
+              sale_id: existingSaleId,
+              product_id: it.product_id,
+              qty_kg: it.qty_kg,
+              subtotal: it.subtotal,
+              cost_price: it.cost_price || 0,
+              original_qty: it.original_qty || it.qty_kg,
+              unit: it.unit || 'pcs',
+              custom_subtotal: it.custom_subtotal || it.subtotal
+            }));
+            await supabase.from('sale_items').insert(itemsPayload);
+          }
+        } catch (itemCheckErr) {
+          console.warn('Check/insert existing sale_items note:', itemCheckErr);
+        }
+
+        const fullSale: Sale = {
+          ...localSale,
+          id: existingSaleId,
+          payment_method: existingDbSales[0].payment_method || rawPaymentMethod,
+          created_at: existingDbSales[0].created_at || orderTimestamp,
+          items: constructedItems,
+          sale_items: constructedItems,
+        };
+        const updatedSales = getLocalSales().map(s => s.id === tempSaleId || s.id === existingSaleId ? fullSale : s);
+        saveLocalSales(updatedSales);
+        return fullSale;
+      }
+
+      const { data: saleData, error: saleError } = await supabase
+        .from('sales')
+        .insert([{
+          total_amount: Number(order.total_amount) || 0,
+          payment_method: rawPaymentMethod,
+          status: 'COMPLETED',
+          notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'} (${order.delivery_address || ''})`,
+          created_at: orderTimestamp
+        }])
+        .select()
+        .single();
+
+      if (!saleError && saleData) {
+        const saleId = saleData.id;
+        // Insert sale_items
+        if (constructedItems.length > 0) {
+          const itemsPayload = constructedItems.map(it => ({
+            sale_id: saleId,
+            product_id: it.product_id,
+            qty_kg: it.qty_kg,
+            subtotal: it.subtotal,
+            cost_price: it.cost_price || 0,
+            original_qty: it.original_qty || it.qty_kg,
+            unit: it.unit || 'pcs',
+            custom_subtotal: it.custom_subtotal || it.subtotal
+          }));
+
+          try {
+            await supabase.from('sale_items').insert(itemsPayload);
+          } catch (itemInsertErr) {
+            console.warn('Insert sale_items exception:', itemInsertErr);
+          }
+        }
+
+        const fullSale: Sale = {
+          ...saleData,
+          payment_method: rawPaymentMethod,
+          created_at: saleData.created_at || orderTimestamp,
+          items: constructedItems,
+          sale_items: constructedItems,
+          customer_name: order.customer_name,
+          customer_phone: order.customer_phone
+        };
+
+        const updatedSales = getLocalSales().map(s => s.id === tempSaleId ? fullSale : s);
+        saveLocalSales(updatedSales);
+        return fullSale;
+      }
+    } catch (dbErr) {
+      console.warn('Supabase insert online sale error, preserved in local cache:', dbErr);
+    }
+
+    return localSale;
+  } catch (err) {
+    console.error('Error processing online sale to reports:', err);
+    return null;
+  }
+}
+
+export async function syncCompletedOrdersToSales(): Promise<{ syncedCount: number; sales: Sale[] }> {
+  try {
+    const [orders, sales] = await Promise.all([fetchOrders(), fetchSales()]);
+    const completedOrders = orders.filter(o => (o.status || '').toUpperCase() === 'COMPLETED');
+
+    let syncedCount = 0;
+    for (const order of completedOrders) {
+      const orderIdStr = `#ORD-${order.id}`;
+      const existingSale = sales.find(
+        s => (s.notes && s.notes.includes(orderIdStr)) || s.id === `sale_online_${order.id}` || s.id.startsWith(`sale_online_${order.id}_`)
+      );
+
+      const needsSyncOrRepair = !existingSale || !existingSale.items || existingSale.items.length === 0;
+
+      if (needsSyncOrRepair) {
+        console.log(`Auto-syncing/repairing completed online order ${orderIdStr} to sales/reports...`);
+        await processOnlineSaleToReports(order);
+        syncedCount++;
+      }
+    }
+
+    const updatedSales = await fetchSales();
+    return { syncedCount, sales: updatedSales };
+  } catch (err) {
+    console.warn('Error during syncCompletedOrdersToSales:', err);
+    return { syncedCount: 0, sales: getLocalSales() };
+  }
+}
+
+export async function updateOrderStatus(orderId: number, status: 'PENDING' | 'PROCESSED' | 'COMPLETED' | 'CANCELLED'): Promise<Order> {
+  // 1. Fetch current order to check state
+  let currentOrder: Order | null = null;
+  try {
+    const { data } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+    currentOrder = data;
+  } catch (fetchErr) {
+    console.warn('Error reading order before update:', fetchErr);
+  }
+
+  // 2. If moving from PENDING to PROCESSED, deduct stock for products in items_json
+  if (status === 'PROCESSED' && currentOrder && currentOrder.status === 'PENDING' && currentOrder.items_json) {
+    try {
+      const items = Array.isArray(currentOrder.items_json) ? currentOrder.items_json : [];
+      for (const item of items) {
+        const prodId = item.product_id || item.productId || item.id;
+        const qty = Number(item.qty || item.quantity || item.amount) || 0;
+        if (prodId && qty > 0) {
+          try {
+            const { data: prodData } = await supabase
+              .from('products')
+              .select('id, stock_kg, name, unit')
+              .eq('id', prodId)
+              .single();
+
+            if (prodData) {
+              const currentStock = Number(prodData.stock_kg) || 0;
+              const newStock = roundStock(Math.max(0, currentStock - qty), prodData.unit);
+              await supabase
+                .from('products')
+                .update({ stock_kg: newStock })
+                .eq('id', prodId);
+            }
+          } catch (stockDeductErr) {
+            console.warn(`Could not deduct stock for product ${prodId}:`, stockDeductErr);
+          }
+        }
+      }
+    } catch (orderCheckErr) {
+      console.warn('Error reading order for stock deduction:', orderCheckErr);
+    }
+  }
+
+  // 3. Update status in Supabase
+  const { data, error } = await supabase
+    .from('orders')
+    .update({ status })
+    .eq('id', orderId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating order status in Supabase:', error);
+    throw error;
+  }
+
+  const updatedOrder = data || { ...currentOrder, id: orderId, status };
+
+  // 4. If completing the order (COMPLETED), record to Sales & Reports with original timestamp
+  if (status === 'COMPLETED') {
+    try {
+      await processOnlineSaleToReports(updatedOrder);
+    } catch (reportErr) {
+      console.warn('Could not record online order to sales report:', reportErr);
+    }
+  }
+
+  return updatedOrder;
+}
+
+export async function createOrder(order: Omit<Order, 'id' | 'created_at'>): Promise<Order> {
+  const { data, error } = await supabase
+    .from('orders')
+    .insert([order])
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating order:', error);
+    throw error;
+  }
+  return data;
 }
 
 // ==================== DEBTS & CREDITS ====================
@@ -825,6 +1465,10 @@ export interface UtangSyncInfo {
   };
 }
 
+/**
+ * Helper terpusat untuk mendeteksi status utang/piutang transaksi kasir secara akurat dan real-time.
+ * Menghubungkan record penjualan (sales) dengan catatan di buku utang (debts_credits).
+ */
 export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo {
   const isUtang = (sale.payment_method || '').toUpperCase() === 'UTANG';
   if (!isUtang) {
@@ -836,221 +1480,675 @@ export function getSaleDebtInfo(sale: Sale, debts?: DebtCredit[]): UtangSyncInfo
       remainingAmount: 0,
       totalAmount: Number(sale.total_amount || 0),
       matchingDebt: null,
-      statusBadge: { label: 'Lunas', bg: 'bg-emerald-50 text-[#1B5E20] border-emerald-200', badgeText: 'LUNAS' },
+      statusBadge: {
+        label: 'Lunas',
+        bg: 'bg-emerald-50 text-[#1B5E20] border-emerald-200',
+        badgeText: 'LUNAS',
+      },
     };
   }
 
   const allDebts = debts && debts.length > 0 ? debts : getLocalDebts();
   const saleTag = sale.id ? sale.id.slice(0, 8).toLowerCase() : '';
-  const matchingDebt = allDebts.find((d) => d && (d.notes || '').toLowerCase().includes(saleTag));
-  const remaining = matchingDebt ? Number(matchingDebt.remaining_amount) : Number(sale.total_amount || 0);
-  const isLunas = remaining <= 0;
+
+  const matchingDebt = allDebts.find((d) => {
+    if (!d) return false;
+    const notes = (d.notes || '').toLowerCase();
+    if (saleTag && notes.includes(saleTag)) return true;
+    if (sale.id && notes.includes(sale.id.toLowerCase())) return true;
+    if (sale.notes && d.id && sale.notes.toLowerCase().includes(d.id.toLowerCase())) return true;
+
+    // Pencocokan nama pelanggan jika tercatat sama & nominal sama
+    const custName = (sale.customer_name || (sale.notes ? sale.notes.replace(/^Pelanggan:\s*/i, '') : '')).trim().toLowerCase();
+    if (
+      custName &&
+      d.customer_or_supplier_name &&
+      d.type === 'PIUTANG' &&
+      d.customer_or_supplier_name.trim().toLowerCase() === custName &&
+      Math.abs(Number(d.total_amount) - Number(sale.total_amount)) < 1
+    ) {
+      return true;
+    }
+    return false;
+  });
+
+  const saleStatus = (sale.status || '').toLowerCase();
+  const debtStatus = matchingDebt?.status ? matchingDebt.status.toLowerCase() : '';
+  const remaining = matchingDebt !== undefined && matchingDebt !== null
+    ? Number(matchingDebt.remaining_amount)
+    : (saleStatus === 'paid' ? 0 : Number(sale.total_amount || 0));
+
+  const isLunas = saleStatus === 'paid' || debtStatus === 'paid' || (matchingDebt !== undefined && matchingDebt !== null && remaining <= 0);
+  const isPartial = !isLunas && (saleStatus === 'partial' || debtStatus === 'partial' || (remaining > 0 && remaining < Number(sale.total_amount || 0)));
+  const isUnpaid = !isLunas && !isPartial;
+
+  let badgeLabel = 'Utang (Belum Lunas)';
+  let badgeBg = 'bg-amber-50 text-amber-800 border-amber-300';
+  let badgeText = 'BELUM LUNAS';
+
+  if (isLunas) {
+    badgeLabel = 'Utang (Lunas)';
+    badgeBg = 'bg-emerald-50 text-[#1B5E20] border-emerald-300';
+    badgeText = 'LUNAS';
+  } else if (isPartial) {
+    badgeLabel = 'Utang (Dicicil)';
+    badgeBg = 'bg-blue-50 text-blue-800 border-blue-200';
+    badgeText = 'DICICIL';
+  }
 
   return {
     isUtang: true,
     isLunas,
-    isPartial: !isLunas && remaining < Number(sale.total_amount || 0),
-    isUnpaid: !isLunas && remaining === Number(sale.total_amount || 0),
-    remainingAmount: Math.max(0, remaining),
+    isPartial,
+    isUnpaid,
+    remainingAmount: isLunas ? 0 : Math.max(0, remaining),
     totalAmount: Number(sale.total_amount || 0),
     matchingDebt: matchingDebt || null,
     statusBadge: {
-      label: isLunas ? 'Utang (Lunas)' : 'Utang (Belum Lunas)',
-      bg: isLunas ? 'bg-emerald-50 text-[#1B5E20] border-emerald-300' : 'bg-amber-50 text-amber-800 border-amber-300',
-      badgeText: isLunas ? 'LUNAS' : 'BELUM LUNAS',
+      label: badgeLabel,
+      bg: badgeBg,
+      badgeText,
     },
   };
 }
 
+/**
+ * Sinkronisasi otomatis dua arah antara data transaksi penjualan (sales)
+ * dan buku piutang pelanggan (debts_credits).
+ * Jika piutang di buku utang lunas, status penjualan disinkronkan menjadi 'paid' (Lunas)
+ * baik di Supabase maupun LocalStorage.
+ */
+export async function syncSalesWithDebts(
+  inputSales?: Sale[],
+  inputDebts?: DebtCredit[]
+): Promise<{ sales: Sale[]; updatedCount: number }> {
+  const allSales = inputSales || getLocalSales();
+  let allDebts = inputDebts || getLocalDebts();
+
+  if (!inputDebts || inputDebts.length === 0) {
+    try {
+      const { data } = await supabase.from('debts_credits').select('*');
+      if (data && data.length > 0) {
+        allDebts = data;
+        saveLocalDebts(data);
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  let updatedCount = 0;
+  const updatedSales = allSales.map((sale) => {
+    if ((sale.payment_method || '').toUpperCase() !== 'UTANG') {
+      return sale;
+    }
+
+    const info = getSaleDebtInfo(sale, allDebts);
+    const targetStatus = info.isLunas ? 'paid' : (info.isPartial ? 'partial' : 'unpaid');
+
+    if (sale.status !== targetStatus) {
+      updatedCount++;
+      // Sync update to Supabase
+      supabase
+        .from('sales')
+        .update({ status: targetStatus })
+        .eq('id', sale.id)
+        .then(({ error }) => {
+          if (error) console.warn('Supabase sync status sale failed:', error);
+        });
+
+      return {
+        ...sale,
+        status: targetStatus,
+      };
+    }
+
+    return sale;
+  });
+
+  if (updatedCount > 0) {
+    saveLocalSales(updatedSales);
+  }
+
+  return { sales: updatedSales, updatedCount };
+}
+
 export async function fetchDebtsCredits(): Promise<DebtCredit[]> {
   try {
-    const { data, error } = await supabase.from('debts_credits').select('*').order('created_at', { ascending: false });
-    if (error) return getLocalDebts();
-    saveLocalDebts(data || []);
-    return data || [];
-  } catch {
+    const { data, error } = await supabase
+      .from('debts_credits')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('Error fetching debts_credits from Supabase, using local cache:', error.message);
+      return getLocalDebts();
+    }
+    const safeList = (data || []).filter(Boolean);
+    saveLocalDebts(safeList);
+    return safeList;
+  } catch (err) {
+    console.warn('fetchDebtsCredits exception, fallback to local storage:', err);
     return getLocalDebts();
   }
 }
 
-export async function createDebtCredit(debt: any): Promise<DebtCredit> {
-  const item: DebtCredit = { id: `debt_${Date.now()}`, ...debt, created_at: new Date().toISOString() };
-  saveLocalDebts([item, ...getLocalDebts()]);
+export async function createDebtCredit(debt: {
+  type: 'UTANG' | 'PIUTANG' | string;
+  customer_or_supplier_name: string;
+  total_amount: number;
+  remaining_amount: number;
+  status: 'unpaid' | 'partial' | 'paid';
+  due_date?: string | null;
+  phone_number?: string | null;
+  notes?: string | null;
+}): Promise<DebtCredit> {
+  const localItem: DebtCredit = {
+    id: `debt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    ...debt,
+    created_at: new Date().toISOString(),
+  };
+
+  const cached = getLocalDebts();
+  saveLocalDebts([localItem, ...cached]);
+
   try {
-    const { data, error } = await supabase.from('debts_credits').insert([debt]).select().single();
-    if (!error && data) return data;
-  } catch {}
-  return item;
+    const { data, error } = await supabase
+      .from('debts_credits')
+      .insert([debt])
+      .select()
+      .single();
+
+    if (!error && data) {
+      const updated = getLocalDebts().map((d) => (d.id === localItem.id ? data : d));
+      saveLocalDebts(updated);
+      return data;
+    }
+  } catch (err) {
+    console.warn('createDebtCredit Supabase write note, stored in local storage:', err);
+  }
+  return localItem;
 }
 
 export async function payDebtCredit(id: string, paymentAmount: number): Promise<DebtCredit> {
   const cached = getLocalDebts();
-  const cur = cached.find((d) => d.id === id);
-  const rem = Math.max(0, (cur ? Number(cur.remaining_amount) : paymentAmount) - paymentAmount);
-  saveLocalDebts(cached.map((d) => (d.id === id ? { ...d, remaining_amount: rem, status: rem <= 0 ? 'paid' : ('partial' as any) } : d)));
+  const currentLocal = cached.find((d) => d.id === id);
+  const currentRemaining = currentLocal ? Number(currentLocal.remaining_amount) : paymentAmount;
+  const newRemaining = Math.max(0, currentRemaining - paymentAmount);
+  const newStatus = newRemaining <= 0 ? 'paid' : 'partial';
+
+  if (currentLocal) {
+    const updatedLocal = cached.map((d) =>
+      d.id === id ? { ...d, remaining_amount: newRemaining, status: newStatus as any } : d
+    );
+    saveLocalDebts(updatedLocal);
+  }
+
+  let finalDebt: DebtCredit | null = currentLocal ? { ...currentLocal, remaining_amount: newRemaining, status: newStatus as any } : null;
 
   try {
-    const { data } = await supabase.from('debts_credits').select('*').eq('id', id).single();
-    if (data) {
-      const dbRem = Math.max(0, Number(data.remaining_amount) - paymentAmount);
-      await supabase.from('debts_credits').update({ remaining_amount: dbRem, status: dbRem <= 0 ? 'paid' : 'partial' }).eq('id', id);
+    // 1. Fetch current remaining amount from DB
+    const { data: current, error: fetchErr } = await supabase
+      .from('debts_credits')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (!fetchErr && current) {
+      const dbRemaining = Math.max(0, Number(current.remaining_amount) - paymentAmount);
+      const dbStatus = dbRemaining <= 0 ? 'paid' : 'partial';
+
+      const { data, error } = await supabase
+        .from('debts_credits')
+        .update({
+          remaining_amount: dbRemaining,
+          status: dbStatus,
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (!error && data) {
+        finalDebt = data;
+        const synced = getLocalDebts().map((d) => (d.id === id ? data : d));
+        saveLocalDebts(synced);
+      }
     }
-  } catch {}
-  return cur ? { ...cur, remaining_amount: rem, status: rem <= 0 ? 'paid' : 'partial' } : ({} as DebtCredit);
+  } catch (err) {
+    console.warn('payDebtCredit Supabase update note, recorded in local storage:', err);
+  }
+
+  // 2. AUTO SINKRONKAN STATUS KE TRANSAKSI PENJUALAN KASIR (SALES & STRUK)
+  try {
+    const debtObj = finalDebt || currentLocal;
+    if (debtObj) {
+      const debtNotes = (debtObj.notes || '').toLowerCase();
+      const match = debtNotes.match(/transaksi kasir\s*([a-f0-9-]+)/i);
+      const saleTag = match ? match[1].toLowerCase() : null;
+      const targetSaleStatus = (finalDebt?.status === 'paid' || newRemaining <= 0) ? 'paid' : 'partial';
+
+      const localSales = getLocalSales();
+      let hasLocalUpdate = false;
+      const updatedSales = localSales.map((s) => {
+        let isMatch = false;
+        if (saleTag && s.id.toLowerCase().startsWith(saleTag)) isMatch = true;
+        if (debtNotes.includes(s.id.toLowerCase())) isMatch = true;
+        const custName = (s.customer_name || (s.notes ? s.notes.replace(/^Pelanggan:\s*/i, '') : '')).trim().toLowerCase();
+        if (
+          s.payment_method === 'UTANG' &&
+          custName &&
+          debtObj.customer_or_supplier_name &&
+          debtObj.customer_or_supplier_name.trim().toLowerCase() === custName &&
+          Math.abs(Number(s.total_amount) - Number(debtObj.total_amount)) < 1
+        ) {
+          isMatch = true;
+        }
+
+        if (isMatch && s.status !== targetSaleStatus) {
+          hasLocalUpdate = true;
+          return { ...s, status: targetSaleStatus };
+        }
+        return s;
+      });
+
+      if (hasLocalUpdate) {
+        saveLocalSales(updatedSales);
+      }
+
+      // Update in Supabase sales
+      if (saleTag) {
+        const { data: matchedSales } = await supabase
+          .from('sales')
+          .select('id, payment_method, status')
+          .ilike('id', `${saleTag}%`);
+
+        if (matchedSales && matchedSales.length > 0) {
+          for (const ms of matchedSales) {
+            await supabase
+              .from('sales')
+              .update({ status: targetSaleStatus })
+              .eq('id', ms.id);
+          }
+        }
+      }
+    }
+  } catch (syncErr) {
+    console.warn('payDebtCredit auto-sync sale status warning:', syncErr);
+  }
+
+  return finalDebt || currentLocal ? { ...currentLocal, remaining_amount: newRemaining, status: newStatus as any } : ({} as DebtCredit);
 }
 
 export async function deleteDebtCredit(id: string): Promise<void> {
-  saveLocalDebts(getLocalDebts().filter((d) => d.id !== id));
+  const cached = getLocalDebts().filter((d) => d.id !== id);
+  saveLocalDebts(cached);
+
   try {
-    await supabase.from('debts_credits').delete().eq('id', id);
-  } catch {}
+    const { error } = await supabase
+      .from('debts_credits')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.warn('deleteDebtCredit Supabase note:', error);
+    }
+  } catch (err) {
+    console.warn('deleteDebtCredit exception:', err);
+  }
 }
+
+// ==================== DEBT PAYMENTS & CASH FLOW ====================
 
 export async function fetchDebtPayments(): Promise<DebtPayment[]> {
   try {
-    const { data, error } = await supabase.from('debt_payments').select('*').order('created_at', { ascending: false });
-    if (error) return getLocalDebtPayments();
-    saveLocalDebtPayments(data || []);
-    return data || [];
-  } catch {
+    const { data, error } = await supabase
+      .from('debt_payments')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      // Table may not exist yet in Supabase or network error, use cached
+      return getLocalDebtPayments();
+    }
+    const safeList = (data || []).filter(Boolean);
+    saveLocalDebtPayments(safeList);
+    return safeList;
+  } catch (err) {
+    console.warn('fetchDebtPayments fallback to local cache:', err);
     return getLocalDebtPayments();
   }
 }
 
-export async function recordDebtPayment(payload: { debt_id: string; customer_name?: string; amount: number; payment_method: string; notes?: string | null }): Promise<DebtPayment> {
-  const dp: DebtPayment = {
-    id: `dp_${Date.now()}`,
+export async function recordDebtPayment(payload: {
+  debt_id: string;
+  customer_name?: string;
+  amount: number;
+  payment_method: 'TUNAI' | 'QRIS' | string;
+  notes?: string | null;
+}): Promise<DebtPayment> {
+  const method = (payload.payment_method || 'TUNAI').toUpperCase().trim();
+  const normalizedMethod = method === 'QRIS' ? 'QRIS' : 'TUNAI';
+
+  const newPayment: DebtPayment = {
+    id: `dp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     debt_id: payload.debt_id,
     customer_name: payload.customer_name || 'Pelanggan',
-    amount: Number(payload.amount),
-    payment_method: payload.payment_method || 'TUNAI',
+    amount: Number(payload.amount) || 0,
+    payment_method: normalizedMethod,
     type: 'INCOME_DEBT_PAYMENT',
     created_at: new Date().toISOString(),
     notes: payload.notes || null,
   };
-  saveLocalDebtPayments([dp, ...getLocalDebtPayments()]);
-  await payDebtCredit(payload.debt_id, dp.amount);
-  try {
-    await supabase.from('debt_payments').insert([dp]);
-  } catch {}
-  return dp;
-}
 
-// ==================== ORDERS & ONLINE SALES ====================
+  // 1. Save to local debt payments cache
+  const cachedPayments = getLocalDebtPayments();
+  saveLocalDebtPayments([newPayment, ...cachedPayments]);
 
-export async function fetchOrders(): Promise<Order[]> {
+  // 2. Save cash flow entry
+  const cfEntry: CashFlowEntry = {
+    id: `cf_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    type: 'INCOME_DEBT_PAYMENT',
+    amount: newPayment.amount,
+    payment_method: normalizedMethod,
+    reference_id: payload.debt_id,
+    description: `Pelunasan piutang ${payload.customer_name || 'Pelanggan'} (${normalizedMethod})`,
+    created_at: newPayment.created_at,
+  };
+  const cachedCashFlow = getLocalCashFlow();
+  saveLocalCashFlow([cfEntry, ...cachedCashFlow]);
+
+  // 3. Update the debt remaining balance
+  await payDebtCredit(payload.debt_id, newPayment.amount);
+
+  // 4. Try remote sync to Supabase (graceful fallback)
   try {
-    const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
-    if (error) return getLocalOrders();
-    saveLocalOrders(data || []);
-    return data || [];
-  } catch {
-    return getLocalOrders();
+    await supabase.from('debt_payments').insert([newPayment]);
+  } catch (err) {
+    console.warn('debt_payments Supabase insert note (cached locally):', err);
   }
-}
 
-export async function createOrder(order: any): Promise<Order> {
-  const { data, error } = await supabase.from('orders').insert([order]).select().single();
-  if (error) throw error;
-  return data;
-}
-
-export async function updateOrderStatus(orderId: number, status: any): Promise<Order> {
-  const { data, error } = await supabase.from('orders').update({ status }).eq('id', orderId).select().single();
-  if (error) throw error;
-  return data;
-}
-
-export async function syncCompletedOrdersToSales(): Promise<{ syncedCount: number; sales: Sale[] }> {
   try {
-    const [orders, sales] = await Promise.all([fetchOrders(), fetchSales()]);
-    const completedOrders = orders.filter((o) => (o.status || '').toUpperCase() === 'COMPLETED');
-    let syncedCount = 0;
-
-    for (const order of completedOrders) {
-      const orderIdStr = `#ORD-${order.id}`;
-      const existingSale = sales.find((s) => s.notes?.includes(orderIdStr) || s.id === `sale_online_${order.id}`);
-      if (!existingSale) {
-        try {
-          const tempSaleId = `sale_online_${order.id}`;
-          const salePayload = {
-            id: tempSaleId,
-            total_amount: Number(order.total_amount) || 0,
-            payment_method: order.payment_method || 'COD',
-            status: 'COMPLETED',
-            notes: `Pesanan Online ${orderIdStr} - ${order.customer_name || 'Pelanggan'}`,
-            created_at: order.created_at || new Date().toISOString(),
-          };
-          await supabase.from('sales').insert([salePayload]);
-          syncedCount++;
-        } catch {}
-      }
-    }
-    const updatedSales = await fetchSales();
-    return { syncedCount, sales: updatedSales };
-  } catch {
-    return { syncedCount: 0, sales: getLocalSales() };
+    await supabase.from('cash_flow').insert([cfEntry]);
+  } catch (err) {
+    console.warn('cash_flow Supabase insert note (cached locally):', err);
   }
+
+  return newPayment;
 }
 
 // ==================== STORE WALLETS ====================
 
 export async function fetchStoreWallets(): Promise<StoreWallet | null> {
   try {
-    const { data, error } = await supabase.from('store_wallets').select('*').limit(1).maybeSingle();
-    if (error) return getLocalWallet();
+    const { data, error } = await supabase
+      .from('store_wallets')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Error fetching store_wallets, using local cache:', error.message);
+      return getLocalWallet();
+    }
+    if (data) {
+      saveLocalWallet(data);
+    }
     return data || getLocalWallet();
-  } catch {
+  } catch (err) {
+    console.warn('Network exception fetching store_wallets, using local cache:', err);
     return getLocalWallet();
   }
 }
 
 export async function updateStoreWallet(id: number, updates: Partial<StoreWallet>): Promise<StoreWallet> {
-  const { data, error } = await supabase.from('store_wallets').update(updates).eq('id', id).select().single();
-  if (error) throw error;
+  const { data, error } = await supabase
+    .from('store_wallets')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating store wallet:', error);
+    throw error;
+  }
   return data;
 }
 
 export async function upsertStoreWallet(wallet: StoreWallet): Promise<StoreWallet> {
-  const { data, error } = await supabase.from('store_wallets').upsert(wallet).select().single();
-  if (error) throw error;
+  const { data, error } = await supabase
+    .from('store_wallets')
+    .upsert(wallet)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error upserting store wallet:', error);
+    throw error;
+  }
   return data;
 }
 
 // ==================== STORE PROFILE & RECEIPT SETTINGS ====================
 
 export async function fetchStoreProfile(): Promise<StoreProfile> {
+  // 1. Check local storage cache first
+  let cached: StoreProfile = DEFAULT_STORE_PROFILE;
   try {
-    const { data } = await supabase.from('store_profile').select('*').limit(1).maybeSingle();
-    if (data) {
-      return {
-        store_name: data.store_name,
-        tagline: data.tagline,
-        address: data.address,
-        phone: data.phone,
-        footer_message: data.footer_message,
-        footer_policy: data.footer_policy,
-        footer_quote: data.footer_quote,
-      };
+    const raw = localStorage.getItem(STORE_PROFILE_CACHE_KEY);
+    if (raw) {
+      cached = { ...DEFAULT_STORE_PROFILE, ...JSON.parse(raw) };
     }
-  } catch {}
-  return DEFAULT_STORE_PROFILE;
+  } catch (e) {
+    console.warn('Error reading store profile cache:', e);
+  }
+
+  // 2. Try fetching from Supabase table `store_profile` or `settings` if available
+  try {
+    const { data, error } = await supabase
+      .from('store_profile')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && data) {
+      const merged: StoreProfile = {
+        store_name: data.store_name || data.name || cached.store_name,
+        tagline: data.tagline || data.category || cached.tagline,
+        address: data.address || cached.address,
+        phone: data.phone || data.whatsapp || cached.phone,
+        footer_message: data.footer_message || cached.footer_message,
+        footer_policy: data.footer_policy || cached.footer_policy,
+        footer_quote: data.footer_quote || cached.footer_quote,
+      };
+      try {
+        localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(merged));
+      } catch {}
+      return merged;
+    }
+  } catch (err) {
+    // If table doesn't exist yet, gracefully use local cached
+  }
+
+  return cached;
 }
 
 export async function saveStoreProfile(profile: StoreProfile): Promise<StoreProfile> {
+  const cleanProfile: StoreProfile = {
+    store_name: profile.store_name?.trim() || DEFAULT_STORE_PROFILE.store_name,
+    tagline: profile.tagline?.trim() || DEFAULT_STORE_PROFILE.tagline,
+    address: profile.address?.trim() || DEFAULT_STORE_PROFILE.address,
+    phone: profile.phone?.trim() || DEFAULT_STORE_PROFILE.phone,
+    footer_message: profile.footer_message?.trim() || DEFAULT_STORE_PROFILE.footer_message,
+    footer_policy: profile.footer_policy?.trim() || DEFAULT_STORE_PROFILE.footer_policy,
+    footer_quote: profile.footer_quote?.trim() || DEFAULT_STORE_PROFILE.footer_quote,
+  };
+
+  // 1. Save to local storage for immediate persistence
   try {
-    await supabase.from('store_profile').upsert({ id: 1, ...profile, updated_at: new Date().toISOString() });
-  } catch {}
-  return profile;
+    localStorage.setItem(STORE_PROFILE_CACHE_KEY, JSON.stringify(cleanProfile));
+  } catch (e) {
+    console.warn('Failed to save store profile to localStorage:', e);
+  }
+
+  // 2. Attempt upsert to Supabase
+  try {
+    await supabase
+      .from('store_profile')
+      .upsert({
+        id: 1,
+        ...cleanProfile,
+        updated_at: new Date().toISOString(),
+      });
+  } catch (err) {
+    console.info('Saved store profile locally (store_profile table optional in Supabase)');
+  }
+
+  return cleanProfile;
 }
 
-// ==================== INITIAL DATA SEEDER ====================
+// ==================== INITIAL DATA SEEDER (IF EMPTY) ====================
 
 export async function seedInitialProductsIfEmpty(): Promise<boolean> {
   try {
-    const { data } = await supabase.from('products').select('id').limit(1);
-    return !!(data && data.length > 0);
-  } catch {
+    const { data: existing, error } = await supabase.from('products').select('id').limit(1);
+    if (error) return false;
+    if (existing && existing.length > 0) return false; // Already has data
+
+    const sampleProducts = [
+      {
+        name: 'Beras Pandan Wangi Super',
+        category: 'Sembako',
+        cost_price: 13500,
+        selling_price: 16000,
+        stock_kg: 100,
+        min_stock: 20,
+        is_active: true,
+        unit: 'kg',
+        barcode: '899100100001',
+      },
+      {
+        name: 'Minyak Goreng Bimoli 2 Liter',
+        category: 'Sembako',
+        cost_price: 32000,
+        selling_price: 36000,
+        stock_kg: 40,
+        min_stock: 10,
+        is_active: true,
+        unit: 'pouch',
+        barcode: '899100100002',
+      },
+      {
+        name: 'Gula Pasir Gulaku 1kg',
+        category: 'Sembako',
+        cost_price: 15500,
+        selling_price: 18000,
+        stock_kg: 50,
+        min_stock: 15,
+        is_active: true,
+        unit: 'bungkus',
+        barcode: '899100100003',
+      },
+      {
+        name: 'Telur Ayam Ras Segar',
+        category: 'Sembako',
+        cost_price: 26000,
+        selling_price: 29500,
+        stock_kg: 35,
+        min_stock: 10,
+        is_active: true,
+        unit: 'kg',
+        barcode: '899100100004',
+      },
+      {
+        name: 'Bawang Merah Brebes Pilihan',
+        category: 'Bumbu Dapur',
+        cost_price: 30000,
+        selling_price: 38000,
+        stock_kg: 15,
+        min_stock: 5,
+        is_active: true,
+        unit: 'kg',
+        barcode: '899100100005',
+      },
+      {
+        name: 'Bawang Putih Kating',
+        category: 'Bumbu Dapur',
+        cost_price: 34000,
+        selling_price: 42000,
+        stock_kg: 12,
+        min_stock: 5,
+        is_active: true,
+        unit: 'kg',
+        barcode: '899100100006',
+      },
+      {
+        name: 'Cabai Merah Keriting Segar',
+        category: 'Sayur & Bumbu',
+        cost_price: 40000,
+        selling_price: 52000,
+        stock_kg: 8,
+        min_stock: 5,
+        is_active: true,
+        unit: 'kg',
+        barcode: '899100100007',
+      },
+      {
+        name: 'Tepung Terigu Segitiga Biru 1kg',
+        category: 'Sembako',
+        cost_price: 11000,
+        selling_price: 13000,
+        stock_kg: 30,
+        min_stock: 8,
+        is_active: true,
+        unit: 'bungkus',
+        barcode: '899100100008',
+      },
+      {
+        name: 'Indomie Goreng Original (Karton)',
+        category: 'Makanan Instan',
+        cost_price: 108000,
+        selling_price: 118000,
+        stock_kg: 15,
+        min_stock: 5,
+        is_active: true,
+        unit: 'karton',
+        barcode: '899100100009',
+      },
+      {
+        name: 'Kecap Manis Bango 520ml',
+        category: 'Bumbu Dapur',
+        cost_price: 21000,
+        selling_price: 24500,
+        stock_kg: 24,
+        min_stock: 6,
+        is_active: true,
+        unit: 'pouch',
+        barcode: '899100100010',
+      },
+    ];
+
+    const { error: insertErr } = await supabase.from('products').insert(sampleProducts);
+    if (insertErr) {
+      console.warn('Auto-seed products info:', insertErr.message);
+      return false;
+    }
+
+    // Also initialize store_wallets if not present
+    const { data: walletData } = await supabase.from('store_wallets').select('id').limit(1);
+    if (!walletData || walletData.length === 0) {
+      await supabase.from('store_wallets').insert([{
+        id: 1,
+        initial_cash: 500000,
+        shopping_budget: 2000000,
+        operational_budget: 750000,
+        owner_budget: 1000000,
+      }]);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('Seeding check exception:', err);
     return false;
   }
 }
