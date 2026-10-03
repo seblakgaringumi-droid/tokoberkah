@@ -470,6 +470,7 @@ export default function App() {
                     sales={sales}
                     expenses={expenses}
                     wallet={wallet}
+                    products={products}
                     debts={debts}
                     debtPayments={debtPayments}
                     onRefresh={async () => {
