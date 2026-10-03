@@ -297,8 +297,8 @@ export default function App() {
   // Real-time Kas Toko (Total Kas Toko Tunai + QRIS)
   // Formula: Modal Awal + Penjualan Tunai + Saldo QRIS - Biaya Operasional Laci - Belanja Stok Laci
   const kasTokoDetails = useMemo(() => {
-    return getDrawerCashSummary(wallet, sales, expenses);
-  }, [getDrawerCashSummary, wallet, sales, expenses]);
+    return getDrawerCashSummary(wallet, sales, expenses, debtPayments);
+  }, [getDrawerCashSummary, wallet, sales, expenses, debtPayments]);
 
   // Explicitly bound variable 'kasTokoState' for Header (Total Kas Toko Tunai + QRIS)
   const kasTokoState = kasTokoDetails.totalKasToko;
