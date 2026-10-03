@@ -487,11 +487,13 @@ export function calculateDrawerCash(
   debtPayments?: DebtPayment[] | null,
   filterDate?: string
 ): DrawerCashBreakdown {
-  const initialCash = Number(wallet?.initial_cash) || 500000;
+  const initialCash = wallet?.initial_cash !== undefined && wallet?.initial_cash !== null 
+    ? Number(wallet.initial_cash) 
+    : 500000;
   const targetDateStr = filterDate || getLocalDate(new Date());
 
   const isTargetDate = (dateStr?: string | null) => {
-    if (!dateStr) return true; // Default optimistic for newly created in-memory records
+    if (!dateStr) return false;
     return getLocalDate(dateStr) === targetDateStr;
   };
 
