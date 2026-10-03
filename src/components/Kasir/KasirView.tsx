@@ -1174,23 +1174,44 @@ export const KasirView: React.FC<KasirViewProps> = ({
                             {item.product.variants_json.map((v: any, idx: number) => {
                               const isKg = isKgUnit;
                               const targetQty = v.qty 
-                                ? (isKg && v.qty >= 10 ? roundStock(v.qty / 1000, 'kg') : roundStock(v.qty, item.unit || item.product.unit))
+                                ? (isKg && Number(v.qty) >= 10 ? roundStock(Number(v.qty) / 1000, 'kg') : roundStock(Number(v.qty), item.unit || item.product.unit))
                                 : 1;
                               const isSelected = Math.abs(roundStock(item.qty) - targetQty) < 0.001;
+
+                              // Hitung harga: utamakan selling_price varian, atau jika 0/kosong hitung dari targetQty * harga produk
+                              const rawPrice = Number(v.selling_price ?? v.price);
+                              const variantPrice = !isNaN(rawPrice) && rawPrice > 0 
+                                ? rawPrice 
+                                : Math.round(targetQty * (item.product.selling_price || 0));
 
                               return (
                                 <button
                                   key={v.id || idx}
                                   type="button"
-                                  onClick={() => updateItemQty(item.product.id, targetQty)}
+                                  onClick={() => {
+                                    setCart((prev) =>
+                                      prev.map((cartIt) => {
+                                        if (cartIt.product.id === item.product.id) {
+                                          return {
+                                            ...cartIt,
+                                            qty: targetQty,
+                                            custom_gram: roundStock(targetQty * 1000, 'gram'),
+                                            subtotal: variantPrice,
+                                            custom_subtotal: !isNaN(rawPrice) && rawPrice > 0 ? rawPrice : null,
+                                          };
+                                        }
+                                        return cartIt;
+                                      })
+                                    );
+                                  }}
                                   className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition-all cursor-pointer border ${
                                     isSelected
                                       ? 'bg-[#2E7D32] text-white border-[#2E7D32] shadow-2xs font-bold'
                                       : 'bg-emerald-50 hover:bg-emerald-100 text-[#1B5E20] border-emerald-300'
                                   }`}
-                                  title={`${v.name}: ${formatRupiah(v.selling_price)}`}
+                                  title={`${v.name}: ${formatRupiah(variantPrice)}`}
                                 >
-                                  {v.name} ({formatRupiah(v.selling_price)})
+                                  {v.name} ({formatRupiah(variantPrice)})
                                 </button>
                               );
                             })}
@@ -2336,9 +2357,13 @@ export const KasirView: React.FC<KasirViewProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                       {modalVariants.map((v: any, idx: number) => {
                         const targetQty = v.qty 
-                          ? (isKgUnit && v.qty >= 10 ? roundStock(v.qty / 1000, 'kg') : roundStock(v.qty, quickQtyModalProduct.unit))
+                          ? (isKgUnit && Number(v.qty) >= 10 ? roundStock(Number(v.qty) / 1000, 'kg') : roundStock(Number(v.qty), quickQtyModalProduct.unit))
                           : 1;
                         const isSelected = roundStock(parseFloat(customQtyInput) || 0) === targetQty;
+                        const rawPrice = Number(v.selling_price ?? v.price);
+                        const variantPrice = !isNaN(rawPrice) && rawPrice > 0 
+                          ? rawPrice 
+                          : Math.round(targetQty * (quickQtyModalProduct.selling_price || 0));
 
                         return (
                           <button
@@ -2359,7 +2384,7 @@ export const KasirView: React.FC<KasirViewProps> = ({
                                   : (v.unit || '1 pcs')}
                               </span>
                               <span className="font-mono font-bold">
-                                {v.selling_price ? formatRupiah(v.selling_price) : ''}
+                                {formatRupiah(variantPrice)}
                               </span>
                             </div>
                           </button>
