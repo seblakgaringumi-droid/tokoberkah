@@ -708,14 +708,16 @@ export async function fetchSales(): Promise<Sale[]> {
 
     const itemsBySaleId: Record<string, SaleItem[]> = {};
     for (const it of allItems) {
-      const sKey = String(it.sale_id || '').toLowerCase().trim();
+      if (!it || !it.sale_id) continue;
+      const sKey = String(it.sale_id).toLowerCase().trim();
+      if (!sKey || sKey === 'undefined' || sKey === 'null') continue;
       if (!itemsBySaleId[sKey]) itemsBySaleId[sKey] = [];
       const prod = productMap[it.product_id] || {
         id: it.product_id,
         name: (it as any).product_name || 'Barang Sembako',
         category: 'Sembako',
-        selling_price: it.subtotal && it.qty_kg ? it.subtotal / it.qty_kg : 0,
-        cost_price: it.cost_price || 0,
+        selling_price: it.subtotal && it.qty_kg ? it.subtotal / it.qty_kg : (Number(it.subtotal) || 0),
+        cost_price: Number(it.cost_price) || 0,
         stock_kg: 0,
         min_stock: 0,
         is_active: true,
@@ -740,27 +742,27 @@ export async function fetchSales(): Promise<Sale[]> {
 
     const mergedSales: Sale[] = salesData.map(s => {
       const rawId = String(s.id || '').toLowerCase().trim();
-      const cleanShortId = rawId.replace(/-/g, '').slice(0, 8);
-      const cachedMatch = localCached.find(c => {
-        const cId = String(c.id || '').toLowerCase().trim();
-        return cId === rawId || cId.includes(cleanShortId) || rawId.includes(cId.replace(/-/g, '').slice(0, 8));
-      });
+      const cachedMatch = localCached.find(c => String(c.id || '').toLowerCase().trim() === rawId);
 
-      // Match items from itemsBySaleId with multiple key fallbacks (exact, lowercase, no dashes, short 8-char)
+      // Strict exact match first
       let items: SaleItem[] = itemsBySaleId[rawId] || itemsBySaleId[String(s.id)] || [];
-      if (items.length === 0) {
-        for (const k of Object.keys(itemsBySaleId)) {
-          if (k.includes(cleanShortId) || rawId.includes(k.replace(/-/g, '').slice(0, 8))) {
-            items = itemsBySaleId[k];
+
+      // If exact match not found, check matching short prefix (only if length >= 8)
+      if (items.length === 0 && rawId.length >= 8) {
+        const cleanShort = rawId.replace(/[^a-z0-9]/gi, '').slice(0, 8);
+        for (const [k, v] of Object.entries(itemsBySaleId)) {
+          const cleanK = k.replace(/[^a-z0-9]/gi, '');
+          if (cleanK.length >= 8 && (cleanK === cleanShort || cleanK.startsWith(cleanShort))) {
+            items = v;
             break;
           }
         }
       }
 
-      if (items.length === 0 && cachedMatch?.items && cachedMatch.items.length > 0) {
+      if (items.length === 0 && cachedMatch?.items && Array.isArray(cachedMatch.items) && cachedMatch.items.length > 0) {
         items = cachedMatch.items;
       }
-      if (items.length === 0 && cachedMatch?.sale_items && cachedMatch.sale_items.length > 0) {
+      if (items.length === 0 && cachedMatch?.sale_items && Array.isArray(cachedMatch.sale_items) && cachedMatch.sale_items.length > 0) {
         items = cachedMatch.sale_items;
       }
 
