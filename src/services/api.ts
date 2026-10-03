@@ -110,6 +110,23 @@ export function saveLocalDebtPayments(payments: DebtPayment[]) {
   }
 }
 
+export function getLocalExpenses(): Expense[] {
+  try {
+    const raw = localStorage.getItem(EXPENSES_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalExpenses(expenses: Expense[]) {
+  try {
+    localStorage.setItem(EXPENSES_CACHE_KEY, JSON.stringify(expenses));
+  } catch (e) {
+    console.warn('Local storage save expenses note:', e);
+  }
+}
+
 export function getLocalCashFlow(): CashFlowEntry[] {
   try {
     const raw = localStorage.getItem(CASH_FLOW_CACHE_KEY);
@@ -507,6 +524,23 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
     product: item.product,
   }));
 
+  // Deduct stock immediately in local cache
+  try {
+    const currentLocalProds = getLocalProducts();
+    const updatedLocalProds = currentLocalProds.map(p => {
+      const item = payload.items.find(it => it.product.id === p.id);
+      if (item) {
+        const itemUnit = item.unit || item.product.unit;
+        const newStock = roundStock(Math.max(0, (p.stock_kg || 0) - item.qty), itemUnit);
+        return { ...p, stock_kg: newStock };
+      }
+      return p;
+    });
+    saveLocalProducts(updatedLocalProds);
+  } catch (stockLocalErr) {
+    console.warn('Local stock update error:', stockLocalErr);
+  }
+
   const localSale: Sale = {
     id: tempSaleId,
     total_amount: payload.total_amount,
@@ -537,8 +571,11 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
       ? `Pelanggan: ${payload.customer_name} • ${itemsSummary}` 
       : itemsSummary;
 
-    // 1. Insert into sales
-    const { data: saleData, error: saleError } = await supabase
+    // 1. Insert into sales with multi-level resilient fallback
+    let saleData: any = null;
+    let saleError: any = null;
+
+    const res1 = await supabase
       .from('sales')
       .insert([{
         total_amount: payload.total_amount,
@@ -549,9 +586,44 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
       .select()
       .single();
 
+    if (!res1.error && res1.data) {
+      saleData = res1.data;
+    } else {
+      console.warn('Initial sales insert note:', res1.error?.message);
+      const res2 = await supabase
+        .from('sales')
+        .insert([{
+          total_amount: payload.total_amount,
+          payment_method: payload.payment_method,
+          status: payload.payment_method === 'UTANG' ? 'unpaid' : 'paid',
+        }])
+        .select()
+        .single();
+
+      if (!res2.error && res2.data) {
+        saleData = res2.data;
+      } else {
+        const res3 = await supabase
+          .from('sales')
+          .insert([{
+            total_amount: payload.total_amount,
+            payment_method: payload.payment_method,
+          }])
+          .select()
+          .single();
+
+        if (!res3.error && res3.data) {
+          saleData = res3.data;
+        } else {
+          saleError = res1.error || res2.error || res3.error;
+        }
+      }
+    }
+
     if (!saleError && saleData) {
       finalSale = {
         ...saleData,
+        created_at: saleData.created_at || new Date().toISOString(),
         items: constructedItems,
         sale_items: constructedItems,
         cash_received: payload.cash_received,
@@ -559,16 +631,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         customer_name: payload.customer_name,
       };
 
-      // 2. Insert into sale_items (dengan fallback aman jika kolom tertentu belum ada di tabel Supabase)
-      const baseSaleItems = payload.items.map(item => ({
-        sale_id: saleData.id,
-        product_id: item.product.id,
-        qty_kg: item.qty,
-        subtotal: item.subtotal,
-        cost_price: item.product.cost_price || 0,
-      }));
-
-      // Coba insert dengan field lengkap
+      // 2. Insert into sale_items
       const fullSaleItems = payload.items.map(item => ({
         sale_id: saleData.id,
         product_id: item.product.id,
@@ -579,13 +642,20 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         unit: item.unit || item.product.unit || 'kg',
       }));
 
+      const baseSaleItems = payload.items.map(item => ({
+        sale_id: saleData.id,
+        product_id: item.product.id,
+        qty_kg: item.qty,
+        subtotal: item.subtotal,
+        cost_price: item.product.cost_price || 0,
+      }));
+
       let { data: insertedItems, error: itemInsertErr } = await supabase
         .from('sale_items')
         .insert(fullSaleItems)
         .select();
 
       if (itemInsertErr) {
-        console.warn('Full sale_items insert failed, falling back to base columns:', itemInsertErr.message);
         const { data: baseItems, error: baseErr } = await supabase
           .from('sale_items')
           .insert(baseSaleItems)
@@ -610,7 +680,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
       const updatedList = getLocalSales().map((s) => (s.id === tempSaleId ? finalSale : s));
       saveLocalSales(updatedList);
 
-      // 3. Deduct stock for each product
+      // 3. Deduct stock for each product in Supabase
       for (const item of payload.items) {
         try {
           const itemUnit = item.unit || item.product.unit;
@@ -826,9 +896,34 @@ export async function fetchSales(): Promise<Sale[]> {
       };
     });
 
+    // Merge Supabase sales with any pending local sales that are not yet in Supabase
+    const existingSupabaseIds = new Set(salesData.map(s => String(s.id).toLowerCase().trim()));
+    const unmergedLocalSales = localCached.filter(c => {
+      if (!c || !c.id) return false;
+      const cId = String(c.id).toLowerCase().trim();
+      if (existingSupabaseIds.has(cId)) return false;
+      if (cId.length >= 8) {
+        const cleanC = cId.replace(/[^a-z0-9]/gi, '').slice(0, 8);
+        for (const sId of existingSupabaseIds) {
+          const cleanS = sId.replace(/[^a-z0-9]/gi, '');
+          if (cleanS.length >= 8 && (cleanS === cleanC || cleanS.startsWith(cleanC) || cleanC.startsWith(cleanS))) {
+            return false;
+          }
+        }
+      }
+      return true;
+    });
+
+    // Combined sales: unmerged local sales + merged remote sales
+    const combinedSales: Sale[] = [...unmergedLocalSales, ...mergedSales].sort((a, b) => {
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return timeB - timeA;
+    });
+
     // Auto sync status utang jika ada perubahan status di debts_credits
     const cachedDebts = getLocalDebts();
-    const syncedSales = mergedSales.map((s) => {
+    const syncedSales = combinedSales.map((s) => {
       if ((s.payment_method || '').toUpperCase() !== 'UTANG') return s;
       const info = getSaleDebtInfo(s, cachedDebts);
       const targetStatus = info.isLunas ? 'paid' : (info.isPartial ? 'partial' : 'unpaid');
@@ -836,11 +931,77 @@ export async function fetchSales(): Promise<Sale[]> {
     });
 
     saveLocalSales(syncedSales);
+
+    // Background sync any pending local sales to Supabase
+    if (unmergedLocalSales.length > 0) {
+      syncPendingLocalSales(unmergedLocalSales).catch(err => {
+        console.warn('Background syncPendingLocalSales error:', err);
+      });
+    }
+
     return syncedSales;
   } catch (err: any) {
     console.warn('fetchSales exception, fallback to local cache:', err);
     return localCached;
   }
+}
+
+/**
+ * Background auto-sync helper for local sales that haven't been pushed to Supabase yet
+ */
+export async function syncPendingLocalSales(pendingSales?: Sale[]): Promise<number> {
+  const salesToSync = pendingSales || getLocalSales().filter(s => s && s.id && (s.id.startsWith('bon_') || s.id.startsWith('sale_local_')));
+  if (!salesToSync || salesToSync.length === 0) return 0;
+
+  let syncedCount = 0;
+  for (const sale of salesToSync) {
+    try {
+      const itemsList = sale.items || sale.sale_items || [];
+      const itemsSummary = itemsList.map(it => `${it.product?.name || 'Produk'} (${it.qty || it.qty_kg || 1} ${it.unit || 'pcs'})`).join(', ');
+      const noteContent = sale.notes 
+        ? sale.notes 
+        : sale.customer_name 
+        ? `Pelanggan: ${sale.customer_name} • ${itemsSummary}` 
+        : itemsSummary;
+
+      const { data: remoteSale, error: saleErr } = await supabase
+        .from('sales')
+        .insert([{
+          total_amount: sale.total_amount,
+          payment_method: sale.payment_method || 'CASH',
+          status: sale.status || 'paid',
+          notes: noteContent,
+          created_at: sale.created_at || new Date().toISOString(),
+        }])
+        .select()
+        .single();
+
+      if (!saleErr && remoteSale) {
+        syncedCount++;
+        // Update local sale id to the remote id
+        const currentCache = getLocalSales();
+        const updatedCache = currentCache.map(s => s.id === sale.id ? { ...s, id: remoteSale.id } : s);
+        saveLocalSales(updatedCache);
+
+        // Try inserting sale_items if available
+        if (itemsList.length > 0) {
+          const insertItems = itemsList.map(it => ({
+            sale_id: remoteSale.id,
+            product_id: it.product_id,
+            qty_kg: it.qty_kg || it.qty || 1,
+            subtotal: it.subtotal,
+            cost_price: it.cost_price || 0,
+            original_qty: it.original_qty || it.qty || 1,
+            unit: it.unit || 'pcs',
+          }));
+          await supabase.from('sale_items').insert(insertItems);
+        }
+      }
+    } catch (singleErr) {
+      console.warn('Sync pending sale item error:', singleErr);
+    }
+  }
+  return syncedCount;
 }
 
 export async function fetchSalesByDateRange(startDateISO: string, endDateISO: string): Promise<Sale[]> {
