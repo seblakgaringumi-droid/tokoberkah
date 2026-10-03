@@ -139,25 +139,25 @@ export function findMatchingVariant(product?: Product | null, qty?: number | nul
   const targetQtyInGram = roundStock(qty * 1000, 'gram');
 
   for (const v of product.variants_json) {
-    if (!v || typeof v.selling_price !== 'number' || v.selling_price <= 0) continue;
-
+    if (!v) continue;
     const vUnit = (v.unit || '').toLowerCase().trim();
     let vQtyInKg = 0;
 
     if (isKg) {
-      if (vUnit === 'gram' || vUnit === 'gr' || vUnit === 'g' || (v.qty && v.qty >= 10)) {
-        vQtyInKg = (v.qty || 0) / 1000;
+      const vQtyNum = Number(v.qty) || 0;
+      if (vUnit === 'gram' || vUnit === 'gr' || vUnit === 'g' || vQtyNum >= 10) {
+        vQtyInKg = vQtyNum / 1000;
       } else if (vUnit === 'kg' || vUnit === 'kilogram') {
-        vQtyInKg = v.qty || 0;
+        vQtyInKg = vQtyNum;
       } else {
-        vQtyInKg = (v.qty || 0) >= 10 ? (v.qty || 0) / 1000 : (v.qty || 0);
+        vQtyInKg = vQtyNum >= 10 ? vQtyNum / 1000 : vQtyNum;
       }
-      if (Math.abs(vQtyInKg - qty) < 0.001 || Math.abs((v.qty || 0) - targetQtyInGram) < 0.1) {
+      if (Math.abs(vQtyInKg - qty) < 0.001 || Math.abs(vQtyNum - targetQtyInGram) < 0.1) {
         return v;
       }
     } else {
       // For discrete or other units (pcs, buah, etc.)
-      if (v.qty !== null && v.qty !== undefined && Math.abs(v.qty - qty) < 0.001) {
+      if (v.qty !== null && v.qty !== undefined && Math.abs(Number(v.qty) - qty) < 0.001) {
         return v;
       }
     }
@@ -174,8 +174,11 @@ export function calculateSubtotalForQty(product?: Product | null, qty?: number |
   }
 
   const matchingVariant = findMatchingVariant(product, qty);
-  if (matchingVariant && matchingVariant.selling_price > 0) {
-    return Math.round(matchingVariant.selling_price);
+  if (matchingVariant) {
+    const rawVariantPrice = Number(matchingVariant.selling_price ?? (matchingVariant as any).price);
+    if (!isNaN(rawVariantPrice) && rawVariantPrice > 0) {
+      return Math.round(rawVariantPrice);
+    }
   }
 
   return Math.round(qty * (product.selling_price || 0));
