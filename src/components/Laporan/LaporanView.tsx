@@ -36,10 +36,10 @@ import {
   Clock,
   RefreshCw
 } from 'lucide-react';
-import { Sale, Expense, StoreWallet, StoreProfile, DebtPayment, DebtCredit } from '../../types';
+import { Sale, Expense, StoreWallet, StoreProfile, DebtPayment, DebtCredit, SaleItem, Product } from '../../types';
 import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
 import { useFinance } from '../../context/FinanceContext';
-import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo, getLocalOrders } from '../../services/api';
+import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo, getLocalOrders, getLocalProducts } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
 import { SinkingFundCard } from './SinkingFundCard';
@@ -64,6 +64,7 @@ interface LaporanViewProps {
   sales: Sale[];
   expenses: Expense[];
   wallet: StoreWallet | null;
+  products?: Product[];
   onRefresh: () => Promise<void>;
   debts?: DebtCredit[];
   debtPayments?: DebtPayment[];
@@ -80,6 +81,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   sales,
   expenses,
   wallet,
+  products = [],
   onRefresh,
   debts = [],
   debtPayments,
@@ -1089,7 +1091,9 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                   </tr>
                 ) : (
                   filteredSales.map((sale, index) => {
-                    const allProducts = getLocalProducts();
+                    const allProducts = (products && products.length > 0) 
+                      ? products 
+                      : (typeof getLocalProducts === 'function' ? getLocalProducts() : []);
                     const items: SaleItem[] = (() => {
                       if (sale.items && Array.isArray(sale.items) && sale.items.length > 0) {
                         const hasReal = sale.items.some(it => it.product?.name && !it.product.name.startsWith('Transaksi Penjualan Kasir'));
