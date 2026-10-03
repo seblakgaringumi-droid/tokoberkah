@@ -530,6 +530,13 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
   let finalItems = constructedItems;
 
   try {
+    const itemsSummary = payload.items.map(it => `${it.product.name} (${it.qty} ${it.unit || it.product.unit || 'pcs'})`).join(', ');
+    const noteContent = payload.notes 
+      ? payload.notes 
+      : payload.customer_name 
+      ? `Pelanggan: ${payload.customer_name} • ${itemsSummary}` 
+      : itemsSummary;
+
     // 1. Insert into sales
     const { data: saleData, error: saleError } = await supabase
       .from('sales')
@@ -537,7 +544,7 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
         total_amount: payload.total_amount,
         payment_method: payload.payment_method,
         status: payload.payment_method === 'UTANG' ? 'unpaid' : 'paid',
-        notes: payload.notes || (payload.customer_name ? `Pelanggan: ${payload.customer_name}` : null),
+        notes: noteContent,
       }])
       .select()
       .single();
