@@ -25,7 +25,7 @@ export const DEFAULT_STORE_PROFILE: StoreProfile = {
   footer_quote: '*** BERKAH SELALU ***',
 };
 
-function getLocalProducts(): Product[] {
+export function getLocalProducts(): Product[] {
   try {
     const raw = localStorage.getItem(PRODUCTS_CACHE_KEY);
     return raw ? JSON.parse(raw) : [];
@@ -34,11 +34,125 @@ function getLocalProducts(): Product[] {
   }
 }
 
-function saveLocalProducts(products: Product[]) {
+export function saveLocalProducts(products: Product[]) {
   try {
     localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(products));
   } catch (e) {
     console.warn('Local storage save products note:', e);
+  }
+}
+
+export function getLocalOrders(): Order[] {
+  try {
+    const raw = localStorage.getItem(ORDERS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalOrders(orders: Order[]) {
+  try {
+    localStorage.setItem(ORDERS_CACHE_KEY, JSON.stringify(orders));
+  } catch (e) {
+    console.warn('Local storage save orders note:', e);
+  }
+}
+
+export function getLocalSales(): Sale[] {
+  try {
+    const raw = localStorage.getItem(SALES_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalSales(sales: Sale[]) {
+  try {
+    localStorage.setItem(SALES_CACHE_KEY, JSON.stringify(sales));
+  } catch (e) {
+    console.warn('Local storage save sales note:', e);
+  }
+}
+
+export function getLocalDebts(): DebtCredit[] {
+  try {
+    const raw = localStorage.getItem(DEBTS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalDebts(debts: DebtCredit[]) {
+  try {
+    localStorage.setItem(DEBTS_CACHE_KEY, JSON.stringify(debts));
+  } catch (e) {
+    console.warn('Local storage save debts note:', e);
+  }
+}
+
+export function getLocalDebtPayments(): DebtPayment[] {
+  try {
+    const raw = localStorage.getItem(DEBT_PAYMENTS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalDebtPayments(payments: DebtPayment[]) {
+  try {
+    localStorage.setItem(DEBT_PAYMENTS_CACHE_KEY, JSON.stringify(payments));
+  } catch (e) {
+    console.warn('Local storage save debt payments note:', e);
+  }
+}
+
+export function getLocalCashFlow(): CashFlowEntry[] {
+  try {
+    const raw = localStorage.getItem(CASH_FLOW_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalCashFlow(entries: CashFlowEntry[]) {
+  try {
+    localStorage.setItem(CASH_FLOW_CACHE_KEY, JSON.stringify(entries));
+  } catch (e) {
+    console.warn('Local storage save cash flow note:', e);
+  }
+}
+
+export function getLocalWallet(): StoreWallet {
+  try {
+    const raw = localStorage.getItem(WALLET_CACHE_KEY);
+    return raw ? JSON.parse(raw) : {
+      id: 1,
+      initial_cash: 500000,
+      operational_budget: 750000,
+      shopping_budget: 2000000,
+      owner_budget: 1000000,
+    };
+  } catch {
+    return {
+      id: 1,
+      initial_cash: 500000,
+      operational_budget: 750000,
+      shopping_budget: 2000000,
+      owner_budget: 1000000,
+    };
+  }
+}
+
+export function saveLocalWallet(wallet: StoreWallet) {
+  try {
+    localStorage.setItem(WALLET_CACHE_KEY, JSON.stringify(wallet));
+  } catch (e) {
+    console.warn('Local storage save wallet note:', e);
   }
 }
 
@@ -356,74 +470,6 @@ export async function adjustProductStock(id: string, deltaStock: number): Promis
   }
 }
 
-function getLocalSales(): Sale[] {
-  try {
-    const raw = localStorage.getItem(SALES_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalSales(sales: Sale[]) {
-  try {
-    localStorage.setItem(SALES_CACHE_KEY, JSON.stringify(sales));
-  } catch (e) {
-    console.warn('Local storage save sales note:', e);
-  }
-}
-
-export function getLocalDebts(): DebtCredit[] {
-  try {
-    const raw = localStorage.getItem(DEBTS_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveLocalDebts(debts: DebtCredit[]) {
-  try {
-    localStorage.setItem(DEBTS_CACHE_KEY, JSON.stringify(debts));
-  } catch (e) {
-    console.warn('Local storage save debts note:', e);
-  }
-}
-
-export function getLocalDebtPayments(): DebtPayment[] {
-  try {
-    const raw = localStorage.getItem(DEBT_PAYMENTS_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveLocalDebtPayments(payments: DebtPayment[]) {
-  try {
-    localStorage.setItem(DEBT_PAYMENTS_CACHE_KEY, JSON.stringify(payments));
-  } catch (e) {
-    console.warn('Local storage save debt payments note:', e);
-  }
-}
-
-export function getLocalCashFlow(): CashFlowEntry[] {
-  try {
-    const raw = localStorage.getItem(CASH_FLOW_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveLocalCashFlow(entries: CashFlowEntry[]) {
-  try {
-    localStorage.setItem(CASH_FLOW_CACHE_KEY, JSON.stringify(entries));
-  } catch (e) {
-    console.warn('Local storage save cash flow note:', e);
-  }
-}
-
 // ==================== SALES & SALE ITEMS ====================
 
 export interface CheckoutPayload {
@@ -650,20 +696,23 @@ export async function fetchSales(): Promise<Sale[]> {
     // Ambil seluruh sale_items tanpa join agar aman 100% dari skema constraint / PGRST200
     let allItems: any[] = [];
     try {
-      const { data: itemsData } = await supabase
+      const { data: itemsData, error: itemsErr } = await supabase
         .from('sale_items')
         .select('*');
-      allItems = itemsData || [];
+      if (!itemsErr && itemsData) {
+        allItems = itemsData;
+      }
     } catch (itemFetchErr) {
       console.warn('Separate sale_items fetch error:', itemFetchErr);
     }
 
     const itemsBySaleId: Record<string, SaleItem[]> = {};
     for (const it of allItems) {
-      if (!itemsBySaleId[it.sale_id]) itemsBySaleId[it.sale_id] = [];
+      const sKey = String(it.sale_id || '').toLowerCase().trim();
+      if (!itemsBySaleId[sKey]) itemsBySaleId[sKey] = [];
       const prod = productMap[it.product_id] || {
         id: it.product_id,
-        name: 'Produk Kasir',
+        name: (it as any).product_name || 'Barang Sembako',
         category: 'Sembako',
         selling_price: it.subtotal && it.qty_kg ? it.subtotal / it.qty_kg : 0,
         cost_price: it.cost_price || 0,
@@ -675,11 +724,12 @@ export async function fetchSales(): Promise<Sale[]> {
         barcode: null,
       };
 
-      itemsBySaleId[it.sale_id].push({
+      itemsBySaleId[sKey].push({
         id: it.id,
         sale_id: it.sale_id,
         product_id: it.product_id,
         qty_kg: Number(it.qty_kg) || Number(it.original_qty) || 1,
+        qty: Number(it.qty_kg) || Number(it.original_qty) || 1,
         subtotal: Number(it.subtotal) || 0,
         cost_price: Number(it.cost_price) || 0,
         original_qty: Number(it.original_qty) || Number(it.qty_kg) || 1,
@@ -689,10 +739,73 @@ export async function fetchSales(): Promise<Sale[]> {
     }
 
     const mergedSales: Sale[] = salesData.map(s => {
-      const cachedMatch = localCached.find(c => c.id === s.id);
-      const items = (itemsBySaleId[s.id] && itemsBySaleId[s.id].length > 0)
-        ? itemsBySaleId[s.id]
-        : (cachedMatch?.items || cachedMatch?.sale_items || []);
+      const rawId = String(s.id || '').toLowerCase().trim();
+      const cleanShortId = rawId.replace(/-/g, '').slice(0, 8);
+      const cachedMatch = localCached.find(c => {
+        const cId = String(c.id || '').toLowerCase().trim();
+        return cId === rawId || cId.includes(cleanShortId) || rawId.includes(cId.replace(/-/g, '').slice(0, 8));
+      });
+
+      // Match items from itemsBySaleId with multiple key fallbacks (exact, lowercase, no dashes, short 8-char)
+      let items: SaleItem[] = itemsBySaleId[rawId] || itemsBySaleId[String(s.id)] || [];
+      if (items.length === 0) {
+        for (const k of Object.keys(itemsBySaleId)) {
+          if (k.includes(cleanShortId) || rawId.includes(k.replace(/-/g, '').slice(0, 8))) {
+            items = itemsBySaleId[k];
+            break;
+          }
+        }
+      }
+
+      if (items.length === 0 && cachedMatch?.items && cachedMatch.items.length > 0) {
+        items = cachedMatch.items;
+      }
+      if (items.length === 0 && cachedMatch?.sale_items && cachedMatch.sale_items.length > 0) {
+        items = cachedMatch.sale_items;
+      }
+
+      // Check if it's an online order with items in localOrders
+      if (items.length === 0) {
+        const orderMatch = (s.notes || '').match(/#ORD-(\d+)/i) || (s.notes || '').match(/ORD-(\d+)/i) || s.id.match(/sale_online_(\d+)/i);
+        if (orderMatch && orderMatch[1]) {
+          const ordId = Number(orderMatch[1]);
+          const localOrders = getLocalOrders();
+          const matchedOrder = localOrders.find(o => o.id === ordId);
+          if (matchedOrder && matchedOrder.items_json) {
+            let raw: any[] = [];
+            if (Array.isArray(matchedOrder.items_json)) raw = matchedOrder.items_json;
+            else if (typeof matchedOrder.items_json === 'string') {
+              try { raw = JSON.parse(matchedOrder.items_json); } catch {}
+            }
+            if (raw.length > 0) {
+              items = raw.map((it: any, idx: number) => ({
+                id: `order_item_${ordId}_${idx}`,
+                sale_id: s.id,
+                product_id: it.product_id || it.id || String(idx),
+                qty_kg: Number(it.quantity || it.qty || it.qty_kg || 1),
+                qty: Number(it.quantity || it.qty || it.qty_kg || 1),
+                subtotal: Number(it.subtotal || (Number(it.price || it.selling_price || 0) * Number(it.quantity || it.qty || 1))),
+                cost_price: Number(it.cost_price || 0),
+                original_qty: Number(it.quantity || it.qty || it.qty_kg || 1),
+                unit: it.unit || 'pcs',
+                product: it.product || productMap[it.product_id] || {
+                  id: it.product_id || it.id,
+                  name: it.product_name || it.name || 'Barang Sembako',
+                  unit: it.unit || 'pcs',
+                  selling_price: it.price || it.selling_price || 0,
+                  cost_price: 0,
+                  stock_kg: 0,
+                  min_stock: 0,
+                  is_active: true,
+                  category: 'Sembako',
+                  image_url: null,
+                  barcode: null,
+                },
+              }));
+            }
+          }
+        }
+      }
 
       return {
         ...s,
