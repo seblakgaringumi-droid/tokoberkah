@@ -2657,16 +2657,16 @@ export async function handlePelunasanUtang(orderId: string | number, jumlahBayar
       }
     }
 
-    // 4. Catat Transaksi Masuk ke Kas Laci (kas_transactions)
+    // 4. Catat Transaksi Status Utang Masa Lalu (TIDAK mengganggu kas laci / penjualan harian)
     try {
       const { error: insertKasError } = await supabase
         .from('kas_transactions')
         .insert([
           {
             jenis: 'pemasukan',
-            kategori: 'Pelunasan Utang Pelanggan',
+            kategori: 'Koreksi Utang Masa Lalu',
             jumlah: jumlahBayar,
-            keterangan: `Pelunasan Nota #${orderIdStr}`,
+            keterangan: `Koreksi Status Utang Masa Lalu Nota #${orderIdStr} (Menu Utang)`,
             created_at: new Date().toISOString()
           }
         ]);
@@ -2678,17 +2678,17 @@ export async function handlePelunasanUtang(orderId: string | number, jumlahBayar
       console.warn('kas_transactions insert exception:', kasErr);
     }
 
-    // 5. Catat ke local debt_payments & cash_flow cache agar langsung masuk ringkasan kas laci & laporan
+    // 5. Catat ke local debt_payments sebagai KOREKSI_MASA_LALU agar status lunas tercatat tanpa merubah penjualan harian
     try {
       const newPayment: DebtPayment = {
         id: `dp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         debt_id: cleanId,
         customer_name: `Pelanggan Nota #${orderIdStr}`,
         amount: jumlahBayar,
-        payment_method: 'TUNAI',
+        payment_method: 'KOREKSI_MASA_LALU',
         type: 'INCOME_DEBT_PAYMENT',
         created_at: new Date().toISOString(),
-        notes: `Pelunasan Nota #${orderIdStr}`,
+        notes: `Koreksi pelunasan status utang masa lalu Nota #${orderIdStr} (Menu Utang)`,
       };
       const cachedPayments = getLocalDebtPayments();
       saveLocalDebtPayments([newPayment, ...cachedPayments]);
