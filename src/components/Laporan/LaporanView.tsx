@@ -1501,9 +1501,10 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                                 </div>
 
                                 {items.length === 0 ? (
-                                  <p className="text-xs text-gray-400 py-1">
-                                    Rincian individual item tidak tersedia untuk transaksi lama ini.
-                                  </p>
+                                  <div className="py-2 text-xs flex items-center justify-between bg-gray-50 p-2.5 rounded-lg border border-gray-200">
+                                    <span className="font-semibold text-gray-700">Ringkasan Transaksi Kasir</span>
+                                    <span className="font-mono font-bold text-gray-900">{formatRupiah(sale.total_amount)}</span>
+                                  </div>
                                 ) : (
                                   <div className="space-y-3">
                                     <div className="space-y-2 divide-y divide-gray-100">
