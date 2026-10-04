@@ -1966,14 +1966,56 @@ export async function fetchDebtsCredits(): Promise<DebtCredit[]> {
 
     if (error) {
       console.warn('Error fetching debts_credits from Supabase, using local cache:', error.message);
-      return getLocalDebts();
+      return normalizeDebtTypes(getLocalDebts());
     }
     const safeList = (data || []).filter(Boolean);
-    saveLocalDebts(safeList);
-    return safeList;
+    const normalized = normalizeDebtTypes(safeList);
+    saveLocalDebts(normalized);
+
+    // Auto update misclassified customer debt records in Supabase
+    syncCorrectedDebtTypesToDb(normalized).catch(() => {});
+
+    return normalized;
   } catch (err) {
     console.warn('fetchDebtsCredits exception, fallback to local storage:', err);
-    return getLocalDebts();
+    return normalizeDebtTypes(getLocalDebts());
+  }
+}
+
+function normalizeDebtTypes(list: DebtCredit[]): DebtCredit[] {
+  return list.map((item) => {
+    if (!item) return item;
+    const name = (item.customer_or_supplier_name || '').toLowerCase();
+    const notes = (item.notes || '').toLowerCase();
+    const itemId = String(item.id || '').toLowerCase();
+
+    const isCustomer =
+      name.includes('pelanggan') ||
+      notes.includes('transaksi kasir') ||
+      notes.includes('kasir') ||
+      itemId.startsWith('sale_debt_') ||
+      itemId.startsWith('bon_');
+
+    if (isCustomer && item.type !== 'PIUTANG') {
+      return { ...item, type: 'PIUTANG' };
+    }
+    return item;
+  });
+}
+
+async function syncCorrectedDebtTypesToDb(list: DebtCredit[]): Promise<void> {
+  for (const item of list) {
+    const name = (item.customer_or_supplier_name || '').toLowerCase();
+    const notes = (item.notes || '').toLowerCase();
+    const isCustomer = name.includes('pelanggan') || notes.includes('transaksi kasir') || notes.includes('kasir');
+
+    if (isCustomer && item.id && !item.id.startsWith('debt_local_') && !item.id.startsWith('sale_debt_')) {
+      try {
+        await supabase.from('debts_credits').update({ type: 'PIUTANG' }).eq('id', item.id);
+      } catch (e) {
+        // ignore
+      }
+    }
   }
 }
 
