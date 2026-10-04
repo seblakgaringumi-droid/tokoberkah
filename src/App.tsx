@@ -301,7 +301,7 @@ export default function App() {
   const pendingOrdersCount = (orders || []).filter((o) => o && o.status === 'PENDING').length;
   const unpaidDebtsCount = (debts || []).filter((d) => d && d.status !== 'paid').length;
 
-  // Global Finance State (Syncing Kas Toko dengan Laporan & Saldo QRIS)
+  // Global Finance State (Syncing Kas Toko with Laporan & Saldo QRIS)
   const { getDrawerCashSummary } = useFinance();
 
   // Real-time Kas Toko (Total Kas Toko Tunai + QRIS)
@@ -453,6 +453,9 @@ export default function App() {
                 {activeTab === 'utang' && (
                   <UtangView
                     debts={debts}
+                    debtPayments={debtPayments}
+                    sales={sales}
+                    orders={orders}
                     onRefresh={async () => {
                       const [d, dp, s] = await Promise.all([
                         fetchDebtsCredits(),
