@@ -1244,7 +1244,13 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         candidateItems = sale.sale_items;
                       }
 
-                      const hasGeneric = candidateItems.length > 0 && candidateItems.every(it => !it.product?.name || it.product?.name === 'Barang Sembako');
+                      const isDummyName = (it: SaleItem) => {
+                        if (!it || !it.product || !it.product.name) return true;
+                        const nm = it.product.name.trim().toLowerCase();
+                        return nm === 'barang sembako' || nm.includes('belanjaan sembako') || nm.includes('belanjaan toko') || nm.includes('belanjaan pesanan online');
+                      };
+
+                      const hasGeneric = candidateItems.length > 0 && candidateItems.every(isDummyName);
                       if (candidateItems.length > 0 && !hasGeneric) {
                         return candidateItems;
                       }
@@ -1258,10 +1264,10 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         const tS = sale.created_at ? new Date(sale.created_at).getTime() : 0;
                         return Math.abs(tL - tS) < 180000 && Number(ls.total_amount) === Number(sale.total_amount);
                       });
-                      if (matchedLocal?.items && matchedLocal.items.length > 0 && !matchedLocal.items.every(it => !it.product?.name || it.product?.name === 'Barang Sembako')) {
+                      if (matchedLocal?.items && matchedLocal.items.length > 0 && !matchedLocal.items.every(isDummyName)) {
                         return matchedLocal.items;
                       }
-                      if (matchedLocal?.sale_items && matchedLocal.sale_items.length > 0 && !matchedLocal.sale_items.every(it => !it.product?.name || it.product?.name === 'Barang Sembako')) {
+                      if (matchedLocal?.sale_items && matchedLocal.sale_items.length > 0 && !matchedLocal.sale_items.every(isDummyName)) {
                         return matchedLocal.sale_items;
                       }
 
