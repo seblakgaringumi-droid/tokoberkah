@@ -23,7 +23,7 @@ import {
   Check
 } from 'lucide-react';
 import { DebtCredit, DebtPayment, Sale, Order } from '../../types';
-import { formatRupiah, formatDate, formatDateTime, playBeep } from '../../lib/utils';
+import { formatRupiah, formatDate, formatDateTime, playBeep, getLocalDate } from '../../lib/utils';
 import { 
   createDebtCredit, 
   payDebtCredit, 
@@ -318,12 +318,16 @@ export const UtangView: React.FC<UtangViewProps> = ({
         if (match) saleIdMatch = match[0].replace('#', '');
       }
 
+      const isPastCorrection = (paymentMethod as string) === 'KOREKSI_MASA_LALU';
+
       const newPayment = await recordDebtPayment({
         debt_id: payModalItem.id,
         customer_name: payModalItem.customer_or_supplier_name,
         amount,
-        payment_method: paymentMethod,
-        notes: `Pelunasan ${isPiutang ? 'piutang pelanggan' : 'utang supplier'} (${paymentMethod}): ${payModalItem.customer_or_supplier_name}${payModalItem.notes ? ` [${payModalItem.notes}]` : ''}`,
+        payment_method: isPastCorrection ? 'KOREKSI_MASA_LALU' : paymentMethod,
+        notes: isPastCorrection
+          ? `Koreksi status pembukuan masa lalu: ${payModalItem.customer_or_supplier_name} (Tanpa masuk kas laci shift hari ini)`
+          : `Pelunasan ${isPiutang ? 'piutang pelanggan' : 'utang supplier'} (${paymentMethod}): ${payModalItem.customer_or_supplier_name}${payModalItem.notes ? ` [${payModalItem.notes}]` : ''}`,
       });
 
       if (saleIdMatch) {
@@ -335,7 +339,11 @@ export const UtangView: React.FC<UtangViewProps> = ({
       }
 
       playBeep('success');
-      alert(`Pelunasan berhasil dicatat! Kas Toko bertambah ${formatRupiah(amount)}`);
+      if (isPastCorrection) {
+        alert(`Status utang ${payModalItem.customer_or_supplier_name} berhasil diperbarui menjadi LUNAS!\n\nSesuai pengaturan, transaksi koreksi ini TIDAK menambah kas laci shift hari ini.`);
+      } else {
+        alert(`Pelunasan berhasil dicatat! Kas Toko bertambah ${formatRupiah(amount)}`);
+      }
       setPayModalItem(null);
       setPaymentInput('');
       setPaymentMethod('TUNAI');
@@ -776,6 +784,13 @@ export const UtangView: React.FC<UtangViewProps> = ({
                                   onClick={() => {
                                     setPayModalItem(item);
                                     setPaymentInput(item.remaining_amount);
+                                    const itemDate = item.created_at ? item.created_at.substring(0, 10) : '';
+                                    const todayStr = getLocalDate();
+                                    if (itemDate && itemDate < todayStr) {
+                                      setPaymentMethod('KOREKSI_MASA_LALU' as any);
+                                    } else {
+                                      setPaymentMethod('TUNAI');
+                                    }
                                   }}
                                   className="px-3 py-1 bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs font-bold rounded-lg transition-colors shadow-xs cursor-pointer"
                                 >
@@ -1167,36 +1182,56 @@ export const UtangView: React.FC<UtangViewProps> = ({
                 </div>
               </div>
 
-              {/* Payment Method */}
+              {/* Payment Method & Impact Mode */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Metode Penerimaan Uang
+                  Pilih Tipe Dampak Arus Kas Shift Hari Ini
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
                   <button
                     type="button"
-                    onClick={() => setPaymentMethod('TUNAI')}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
-                      paymentMethod === 'TUNAI'
-                        ? 'bg-[#2E7D32] text-white border-[#2E7D32] shadow-xs'
+                    onClick={() => setPaymentMethod('KOREKSI_MASA_LALU' as any)}
+                    className={`w-full p-2.5 rounded-xl text-xs font-semibold text-left border transition-all cursor-pointer flex items-start gap-2.5 ${
+                      (paymentMethod as string) === 'KOREKSI_MASA_LALU'
+                        ? 'bg-purple-50 text-purple-900 border-purple-400 ring-2 ring-purple-400/20 shadow-xs'
                         : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
                     }`}
                   >
-                    <DollarSign className="w-3.5 h-3.5" />
-                    <span>Uang Tunai (Laci)</span>
+                    <CheckCircle2 className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-bold text-purple-950 block">Koreksi Status Pembukuan Masa Lalu</span>
+                      <span className="text-[11px] text-gray-600 block leading-tight">
+                        Status utang berubah <strong>LUNAS</strong> di Buku Utang & Nota, <strong>TANPA mempengaruhi/menambah kas laci shift hari ini</strong>.
+                      </span>
+                    </div>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('QRIS')}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
-                      paymentMethod === 'QRIS'
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                        : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
-                    }`}
-                  >
-                    <CreditCard className="w-3.5 h-3.5" />
-                    <span>QRIS / Bank</span>
-                  </button>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('TUNAI')}
+                      className={`py-2 px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
+                        paymentMethod === 'TUNAI'
+                          ? 'bg-[#2E7D32] text-white border-[#2E7D32] shadow-xs'
+                          : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                      }`}
+                    >
+                      <DollarSign className="w-3.5 h-3.5" />
+                      <span>Terima Cash Hari Ini</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('QRIS')}
+                      className={`py-2 px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
+                        paymentMethod === 'QRIS'
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                          : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                      }`}
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>Transfer QRIS Hari Ini</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
