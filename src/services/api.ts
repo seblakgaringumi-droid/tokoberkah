@@ -1354,15 +1354,76 @@ export async function updateExpense(id: string, updates: Partial<Expense>): Prom
 }
 
 export async function deleteExpense(id: string): Promise<void> {
-  const { error } = await supabase
-    .from('expenses')
-    .delete()
-    .eq('id', id);
+  const currentLocal = getLocalExpenses();
+  const updatedLocal = currentLocal.filter((exp) => String(exp.id) !== String(id));
+  saveLocalExpenses(updatedLocal);
 
-  if (error) {
-    console.error('Error deleting expense:', error);
-    throw error;
+  try {
+    const { error } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.warn('Error deleting expense from Supabase, removed locally:', error.message);
+    }
+  } catch (err) {
+    console.warn('Network exception deleting expense, removed locally:', err);
   }
+}
+
+/**
+ * Detects and removes duplicate expense records (same title, amount, and date)
+ * across both Supabase database and local storage.
+ */
+export async function cleanupDuplicateExpenses(): Promise<{ totalRemoved: number; remainingCount: number }> {
+  const allExpenses = await fetchExpenses();
+
+  // Sort by created_at ascending (oldest first) so original record is kept
+  const sorted = [...allExpenses].sort((a, b) => {
+    const tA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const tB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return tA - tB;
+  });
+
+  const seenKeys = new Map<string, string>();
+  const duplicateIdsToDestroy: string[] = [];
+
+  for (const exp of sorted) {
+    if (!exp || !exp.id) continue;
+    const cleanTitle = (exp.title || '').trim().toLowerCase();
+    const dateDay = exp.created_at ? exp.created_at.substring(0, 10) : ''; // YYYY-MM-DD
+    const amountVal = Number(exp.amount) || 0;
+    const key = `${cleanTitle}_${amountVal}_${dateDay}`;
+
+    if (seenKeys.has(key)) {
+      duplicateIdsToDestroy.push(exp.id);
+    } else {
+      seenKeys.set(key, exp.id);
+    }
+  }
+
+  if (duplicateIdsToDestroy.length === 0) {
+    return { totalRemoved: 0, remainingCount: allExpenses.length };
+  }
+
+  // Remove from local storage cache
+  const localCache = getLocalExpenses();
+  const dupSet = new Set(duplicateIdsToDestroy);
+  const updatedLocal = localCache.filter((e) => !dupSet.has(e.id));
+  saveLocalExpenses(updatedLocal);
+
+  // Remove from Supabase
+  for (const id of duplicateIdsToDestroy) {
+    try {
+      await supabase.from('expenses').delete().eq('id', id);
+    } catch (err) {
+      console.warn('Failed to delete duplicate expense id from Supabase:', id, err);
+    }
+  }
+
+  const reFetched = await fetchExpenses();
+  return { totalRemoved: duplicateIdsToDestroy.length, remainingCount: reFetched.length };
 }
 
 
