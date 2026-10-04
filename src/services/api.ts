@@ -975,11 +975,20 @@ export async function fetchSales(): Promise<Sale[]> {
         }
       }
 
+      // Fallback to local cache only if not generic placeholder items
       if (items.length === 0 && cachedMatch?.items && Array.isArray(cachedMatch.items) && cachedMatch.items.length > 0) {
-        items = cachedMatch.items;
+        const nonGeneric = cachedMatch.items.filter(it => {
+          const nm = (it.product?.name || '').toLowerCase();
+          return nm && !nm.includes('belanjaan sembako') && !nm.includes('belanjaan toko') && nm !== 'barang sembako';
+        });
+        if (nonGeneric.length > 0) items = nonGeneric;
       }
       if (items.length === 0 && cachedMatch?.sale_items && Array.isArray(cachedMatch.sale_items) && cachedMatch.sale_items.length > 0) {
-        items = cachedMatch.sale_items;
+        const nonGeneric = cachedMatch.sale_items.filter(it => {
+          const nm = (it.product?.name || '').toLowerCase();
+          return nm && !nm.includes('belanjaan sembako') && !nm.includes('belanjaan toko') && nm !== 'barang sembako';
+        });
+        if (nonGeneric.length > 0) items = nonGeneric;
       }
 
       // Match localCached by timestamp & total_amount if exact ID match failed
