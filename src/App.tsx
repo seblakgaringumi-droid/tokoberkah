@@ -301,7 +301,7 @@ export default function App() {
   const pendingOrdersCount = (orders || []).filter((o) => o && o.status === 'PENDING').length;
   const unpaidDebtsCount = (debts || []).filter((d) => d && d.status !== 'paid').length;
 
-  // Global Finance State (Syncing Kas Toko with Laporan & Saldo QRIS)
+  // Global Finance State (Syncing Kas Toko dengan Laporan & Saldo QRIS)
   const { getDrawerCashSummary } = useFinance();
 
   // Real-time Kas Toko (Total Kas Toko Tunai + QRIS)
@@ -551,8 +551,7 @@ export default function App() {
       />
     </div>
   );
-}
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+}import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Navigation } from './components/Navigation';
 import { KasirView } from './components/Kasir/KasirView';
@@ -855,7 +854,7 @@ export default function App() {
   const pendingOrdersCount = (orders || []).filter((o) => o && o.status === 'PENDING').length;
   const unpaidDebtsCount = (debts || []).filter((d) => d && d.status !== 'paid').length;
 
-  // Global Finance State (Syncing Kas Toko with Laporan & Saldo QRIS)
+  // Global Finance State (Syncing Kas Toko dengan Laporan & Saldo QRIS)
   const { getDrawerCashSummary } = useFinance();
 
   // Real-time Kas Toko (Total Kas Toko Tunai + QRIS)
