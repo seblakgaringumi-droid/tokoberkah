@@ -226,9 +226,9 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   // Date filtering helper with precise Asia/Jakarta (WIB) timezone matching
   const filterByDate = (dateStr?: string | null) => {
     if (dateFilter === 'semua') return true;
-    const effectiveDate = dateStr || new Date().toISOString();
-    const txDateStr = getLocalDate(effectiveDate);
-    if (!txDateStr) return true;
+    if (!dateStr || typeof dateStr !== 'string' || !dateStr.trim() || dateStr.trim() === '-' || dateStr.trim() === 'null') return false;
+    const txDateStr = getLocalDate(dateStr.trim());
+    if (!txDateStr) return false;
 
     const todayStr = getLocalDate(new Date());
 
