@@ -564,9 +564,16 @@ export async function processSale(payload: CheckoutPayload): Promise<{ sale: Sal
   let finalItems = constructedItems;
 
   try {
-    const itemsSummary = payload.items.map(it => `${it.product.name} (${it.qty} ${it.unit || it.product.unit || 'pcs'})`).join(', ');
+    const itemsSummary = payload.items.map(it => {
+      const pName = it.product.name;
+      const qty = it.qty;
+      const unit = it.unit || it.product.unit || 'pcs';
+      const sub = it.subtotal;
+      return `${pName} (${qty} ${unit}) [Rp ${sub}]`;
+    }).join(', ');
+
     const noteContent = payload.notes 
-      ? payload.notes 
+      ? `${payload.notes} • ${itemsSummary}` 
       : payload.customer_name 
       ? `Pelanggan: ${payload.customer_name} • ${itemsSummary}` 
       : itemsSummary;
@@ -768,7 +775,7 @@ export function parseNotesToItems(
   const allProducts = productsList && productsList.length > 0 ? productsList : getLocalProducts();
   const trimmed = (notesStr || '').trim();
 
-  // 1. Coba parse daftar item dari isi catatan (notes)
+  // Parse daftar item dari isi catatan (notes)
   if (trimmed && !trimmed.startsWith('Transaksi kasir') && trimmed !== 'null' && trimmed !== '-') {
     const clean = trimmed.replace(/^Pelanggan:\s*[^•]+\s*•\s*/i, '').replace(/^Pelanggan:\s*/i, '').trim();
     if (clean) {
@@ -781,12 +788,26 @@ export function parseNotesToItems(
           const part = parts[idx];
           if (!part) continue;
 
-          // Pattern A: "Nama Barang (0.5 Satengah)" or "Beras Pandan (2 kg)"
-          const matchParen = part.match(/^(.*?)\s*\(([\d.]+)\s*([a-zA-Z\s]+)\)$/);
-          // Pattern B: "Nama Barang x2" or "Mie Sedap (1 Pcs) x2"
-          const matchX = part.match(/^(.*?)\s*x(\d+)$/);
+          // Check if subtotal is embedded as [Rp 14000] or [Rp 14.000]
+          let embeddedSubtotal: number | null = null;
+          const subMatch = part.match(/\[Rp\s*([\d.]+)]/i);
+          if (subMatch) {
+            const rawSub = subMatch[1].replace(/\./g, '');
+            const parsedSub = parseFloat(rawSub);
+            if (!isNaN(parsedSub) && parsedSub > 0) {
+              embeddedSubtotal = Math.round(parsedSub);
+            }
+          }
 
-          let name = part;
+          // Strip [Rp ...] from item string for name parsing
+          const cleanPart = part.replace(/\[Rp\s*[\d.]+]/i, '').trim();
+
+          // Pattern A: "Nama Barang (0.5 Satengah)" or "Beras Pandan (2 kg)"
+          const matchParen = cleanPart.match(/^(.*?)\s*\(([\d.]+)\s*([a-zA-Z\s]+)\)$/);
+          // Pattern B: "Nama Barang x2"
+          const matchX = cleanPart.match(/^(.*?)\s*x(\d+)$/);
+
+          let name = cleanPart;
           let qty = 1;
           let unit = 'pcs';
 
@@ -808,7 +829,11 @@ export function parseNotesToItems(
           ));
 
           const itemPrice = foundProd ? Number(foundProd.selling_price) : 0;
-          const calcSub = (foundProd && itemPrice > 0) ? Math.round(itemPrice * qty) : equalSubtotal;
+          const finalSubtotal = embeddedSubtotal !== null 
+            ? embeddedSubtotal 
+            : (foundProd && itemPrice > 0) 
+            ? Math.round(itemPrice * qty) 
+            : equalSubtotal;
 
           parsedItems.push({
             id: `parsed_item_${idx}_${Date.now()}`,
@@ -816,16 +841,16 @@ export function parseNotesToItems(
             product_id: foundProd ? foundProd.id : `prod_parsed_${idx}`,
             qty_kg: qty,
             qty: qty,
-            subtotal: calcSub || equalSubtotal,
-            cost_price: foundProd ? Number(foundProd.cost_price) : Math.round((calcSub || equalSubtotal) * 0.8),
+            subtotal: finalSubtotal || equalSubtotal,
+            cost_price: foundProd ? Number(foundProd.cost_price) : Math.round((finalSubtotal || equalSubtotal) * 0.8),
             original_qty: qty,
             unit: unit || foundProd?.unit || 'pcs',
             product: foundProd || {
               id: `prod_parsed_${idx}`,
               name: name || 'Barang Sembako',
               category: 'Sembako',
-              selling_price: calcSub || equalSubtotal,
-              cost_price: Math.round((calcSub || equalSubtotal) * 0.8),
+              selling_price: finalSubtotal || equalSubtotal,
+              cost_price: Math.round((finalSubtotal || equalSubtotal) * 0.8),
               stock_kg: 0,
               min_stock: 0,
               is_active: true,
@@ -841,51 +866,6 @@ export function parseNotesToItems(
         }
       }
     }
-  }
-
-  // 2. Pencocokan harga persis dari daftar produk
-  if (total > 0) {
-    const exactProd = allProducts.find(p => p && Number(p.selling_price) === total);
-    if (exactProd) {
-      return [{
-        id: `exact_price_item_${Date.now()}`,
-        sale_id: '',
-        product_id: exactProd.id,
-        qty_kg: 1,
-        qty: 1,
-        subtotal: total,
-        cost_price: Number(exactProd.cost_price) || Math.round(total * 0.8),
-        original_qty: 1,
-        unit: exactProd.unit || 'pcs',
-        product: exactProd,
-      }];
-    }
-
-    // 3. Fallback item resmi belanja kasir agar tidak pernah menampilkan "0 Macam Barang"
-    return [{
-      id: `fallback_item_${Date.now()}`,
-      sale_id: '',
-      product_id: 'prod_belanja_kasir',
-      qty_kg: 1,
-      qty: 1,
-      subtotal: total,
-      cost_price: Math.round(total * 0.8),
-      original_qty: 1,
-      unit: 'Paket',
-      product: {
-        id: 'prod_belanja_kasir',
-        name: 'Belanjaan Sembako Toko Berkah',
-        category: 'Sembako',
-        selling_price: total,
-        cost_price: Math.round(total * 0.8),
-        stock_kg: 0,
-        min_stock: 0,
-        is_active: true,
-        image_url: null,
-        unit: 'Paket',
-        barcode: null,
-      },
-    }];
   }
 
   return [];
