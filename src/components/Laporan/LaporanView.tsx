@@ -40,7 +40,7 @@ import {
 import { Sale, Expense, StoreWallet, StoreProfile, DebtPayment, DebtCredit, SaleItem, Product } from '../../types';
 import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
 import { useFinance } from '../../context/FinanceContext';
-import { createExpense, deleteExpense, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo, getLocalOrders, getLocalProducts } from '../../services/api';
+import { createExpense, deleteExpense, cleanupDuplicateExpenses, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo, getLocalOrders, getLocalProducts } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
 import { SinkingFundCard } from './SinkingFundCard';
@@ -445,6 +445,60 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
       return src === expenseSourceFilter;
     });
   }, [filteredExpenses, expenseSourceFilter]);
+
+  // Identification of duplicate expenses (same title, amount, and date YYYY-MM-DD)
+  const duplicateExpensesMap = useMemo(() => {
+    const seenMap = new Map<string, string>();
+    const dupIds = new Set<string>();
+
+    const sorted = [...filteredExpenses].sort((a, b) => {
+      const tA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return tA - tB;
+    });
+
+    for (const exp of sorted) {
+      if (!exp || !exp.id) continue;
+      const cleanTitle = (exp.title || '').trim().toLowerCase();
+      const dateDay = exp.created_at ? exp.created_at.substring(0, 10) : '';
+      const amountVal = Number(exp.amount) || 0;
+      const key = `${cleanTitle}_${amountVal}_${dateDay}`;
+
+      if (seenMap.has(key)) {
+        dupIds.add(exp.id);
+      } else {
+        seenMap.set(key, exp.id);
+      }
+    }
+
+    return dupIds;
+  }, [filteredExpenses]);
+
+  const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
+
+  const handleCleanupDuplicates = async () => {
+    const count = duplicateExpensesMap.size;
+    if (count === 0) {
+      alert('Tidak ditemukan transaksi duplikat pada periode ini.');
+      return;
+    }
+
+    if (!window.confirm(`Ditemukan ${count} transaksi Biaya Toko duplikat (produk/nominal/tanggal sama).\n\nHapus ${count} transaksi duplikat ini dan sisakan 1 transaksi asli?`)) {
+      return;
+    }
+
+    try {
+      setIsCleaningDuplicates(true);
+      const res = await cleanupDuplicateExpenses();
+      playBeep('success');
+      alert(`Berhasil membersihkan ${res.totalRemoved} transaksi pengeluaran duplikat! Data Laporan Biaya Toko kini sudah bersih dan valid.`);
+      await onRefresh();
+    } catch (err: any) {
+      alert(`Gagal membersihkan duplikat: ${err.message}`);
+    } finally {
+      setIsCleaningDuplicates(false);
+    }
+  };
 
   // Handle Add Expense
   const handleCreateExpense = async (e: React.FormEvent) => {
@@ -1751,6 +1805,18 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               <p className="text-xs text-gray-500">Catatan operasional, belanja stok laci, listrik, bensin, plastik, dan kas besar.</p>
             </div>
             <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+              {duplicateExpensesMap.size > 0 && (
+                <button
+                  type="button"
+                  onClick={handleCleanupDuplicates}
+                  disabled={isCleaningDuplicates}
+                  className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                  title="Klik untuk menghapus transaksi duplikat dan menyisakan 1 transaksi asli"
+                >
+                  <AlertTriangle className="w-4 h-4 text-white animate-bounce" />
+                  <span>{isCleaningDuplicates ? 'Membersihkan...' : `Bersihkan ${duplicateExpensesMap.size} Transaksi Duplikat`}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setIsCetakBiayaModalOpen(true)}
@@ -1775,6 +1841,25 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               </button>
             </div>
           </div>
+
+          {duplicateExpensesMap.size > 0 && (
+            <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl flex items-center justify-between text-xs text-amber-900 font-medium">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  Terdeteksi <strong>{duplicateExpensesMap.size} transaksi pengeluaran duplikat</strong> (produk, nominal, dan tanggal transaksi sama). Klik tombol di atas untuk menghapus duplikat secara otomatis.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCleanupDuplicates}
+                disabled={isCleaningDuplicates}
+                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer transition-colors"
+              >
+                Hapus Duplikat Now
+              </button>
+            </div>
+          )}
 
           {/* Filter Source Tabs & Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -1843,8 +1928,15 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                 displayedExpenses.map((exp) => {
                   const isKasBesar = (exp.source || '').toUpperCase() === 'KAS_BESAR';
                   const isStock = isStockExpense(exp);
+                  const isDuplicate = duplicateExpensesMap.has(exp.id);
+
                   return (
-                    <div key={exp.id} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                    <div
+                      key={exp.id}
+                      className={`p-4 flex items-center justify-between transition-colors ${
+                        isDuplicate ? 'bg-amber-50/80 hover:bg-amber-100/80 border-l-4 border-amber-500' : 'hover:bg-gray-50'
+                      }`}
+                    >
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-md flex items-center gap-1 uppercase ${
@@ -1865,12 +1957,22 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                             <span>{isKasBesar ? 'Kas Besar' : 'Laci Kasir'}</span>
                           </span>
 
+                          {isDuplicate && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-200 text-amber-950 border border-amber-400 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 text-amber-800" />
+                              <span>Duplikat</span>
+                            </span>
+                          )}
+
                           <span className={`text-[9.5px] font-medium ${isStock ? 'text-amber-800' : 'text-rose-600'}`}>
                             {isStock ? '• Tidak potong Laba Bersih' : '• Beban (Memotong Laba Bersih)'}
                           </span>
                         </div>
 
-                        <h4 className="font-bold text-gray-900 text-sm">{exp.title}</h4>
+                        <h4 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+                          <span>{exp.title}</span>
+                          {isDuplicate && <span className="text-xs text-amber-800 font-normal">(Transaksi Duplikat)</span>}
+                        </h4>
                         <p className="text-xs text-gray-400">{formatDateTime(exp.created_at)}</p>
                       </div>
 
@@ -1880,7 +1982,12 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         </span>
                         <button
                           onClick={() => handleDeleteExpense(exp.id, exp.title)}
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                            isDuplicate
+                              ? 'text-rose-700 bg-rose-100 hover:bg-rose-200 font-bold border border-rose-300'
+                              : 'text-gray-400 hover:text-rose-600 hover:bg-rose-50'
+                          }`}
+                          title={isDuplicate ? 'Hapus transaksi duplikat ini' : 'Hapus catatan pengeluaran'}
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
