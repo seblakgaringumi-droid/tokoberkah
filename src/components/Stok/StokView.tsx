@@ -25,6 +25,7 @@ import {
   Info,
   ArrowRight,
   ClipboardList,
+  Printer,
   Filter
 } from 'lucide-react';
 import { Product, StoreProfile, Expense, ProductVariant } from '../../types';
@@ -33,6 +34,7 @@ import { useFinance } from '../../context/FinanceContext';
 import { ProductImageUploader } from './ProductImageUploader';
 import { KatalogModal } from '../Katalog/KatalogModal';
 import { DaftarBelanjaModal } from './DaftarBelanjaModal';
+import { CetakStokOpnameModal } from './CetakStokOpnameModal';
 import { 
   createProduct, 
   updateProduct, 
@@ -94,6 +96,7 @@ export const StokView: React.FC<StokViewProps> = ({
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isKatalogModalOpen, setIsKatalogModalOpen] = useState(false);
   const [isDaftarBelanjaModalOpen, setIsDaftarBelanjaModalOpen] = useState(false);
+  const [isCetakStokOpnameModalOpen, setIsCetakStokOpnameModalOpen] = useState(false);
 
   // 1. Restock / Tambah Stok Modal State
   const [isRestockModalOpen, setIsRestockModalOpen] = useState<Product | null>(null);
@@ -786,6 +789,17 @@ export const StokView: React.FC<StokViewProps> = ({
                 <span>{isSeeding ? 'Memuat...' : 'Isi Contoh Sembako'}</span>
               </button>
             )}
+
+            {/* Tombol Cetak / PDF Laporan Stok Opname Lengkap */}
+            <button
+              type="button"
+              onClick={() => setIsCetakStokOpnameModalOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-white hover:bg-gray-100 text-gray-800 text-xs sm:text-sm font-bold flex items-center gap-1.5 border border-gray-300 shadow-2xs transition-all active:scale-[0.98] cursor-pointer"
+              title="Cetak PDF Laporan Stok Opname Lengkap dengan Harga Modal & Jual"
+            >
+              <Printer className="w-4 h-4 text-emerald-700" />
+              <span>🖨️ Cetak PDF Stok Opname</span>
+            </button>
 
             {/* Tombol Download Daftar Belanja Supplier */}
             <button
@@ -2284,6 +2298,14 @@ export const StokView: React.FC<StokViewProps> = ({
         products={products}
         storeProfile={storeProfile}
         activeFilterType={statusFilter}
+      />
+
+      {/* Cetak PDF Laporan Stok Opname Lengkap Modal */}
+      <CetakStokOpnameModal
+        isOpen={isCetakStokOpnameModalOpen}
+        onClose={() => setIsCetakStokOpnameModalOpen(false)}
+        products={products}
+        storeProfile={storeProfile}
       />
     </div>
   );
