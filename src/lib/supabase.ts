@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Project Supabase Resmi Toko Berkah
-export const DEFAULT_SUPABASE_URL = 'https://claitrxfqezqdvvckloa.supabase.co';
+export const DEFAULT_SUPABASE_URL = 'https://bjogkxquvqgikypjpmkz.supabase.co';
 export const DEFAULT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsYWl0cnhmcWV6cWR2dmNrbG9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3Nzg5MTYsImV4cCI6MjEwNjM1NDkxNn0.Mq3e79VW-dAcxc9Xdcuy6sYgyQJdAAr2pWzU5sNfNdw';
 
 export const getActiveSupabaseUrl = (): string => {
