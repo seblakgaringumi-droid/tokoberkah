@@ -2159,6 +2159,24 @@ export async function recordDebtPayment(payload: {
   return newPayment;
 }
 
+export async function deleteDebtPayment(id: string): Promise<void> {
+  const cached = getLocalDebtPayments().filter((dp) => dp.id !== id);
+  saveLocalDebtPayments(cached);
+
+  try {
+    const { error } = await supabase
+      .from('debt_payments')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.warn('deleteDebtPayment Supabase note:', error);
+    }
+  } catch (err) {
+    console.warn('deleteDebtPayment exception:', err);
+  }
+}
+
 // ==================== STORE WALLETS ====================
 
 export async function fetchStoreWallets(): Promise<StoreWallet | null> {
