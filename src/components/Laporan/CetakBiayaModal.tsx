@@ -48,8 +48,8 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
     : 'Semua Sumber Dana (Laci & Kas Besar)';
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl space-y-6 my-6 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto print:static print:p-0 print:bg-transparent print:overflow-visible print:block print:h-auto print:max-h-none">
+      <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl space-y-6 my-6 max-h-[90vh] overflow-y-auto print:p-0 print:m-0 print:max-w-none print:shadow-none print:rounded-none print:max-h-none print:overflow-visible print:h-auto print:w-full print:block">
         {/* Modal Top Control Bar (Hidden on print) */}
         <div className="flex justify-between items-center border-b border-gray-100 pb-4 print:hidden">
           <div>
@@ -77,9 +77,9 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
         </div>
 
         {/* Printable Document Body */}
-        <div className="printable-report border border-gray-200 rounded-2xl p-6 sm:p-8 bg-white space-y-6 text-gray-900 text-xs">
+        <div className="printable-report border border-gray-200 rounded-2xl p-6 sm:p-8 bg-white space-y-6 text-gray-900 text-xs print:border-none print:p-0 print:space-y-4">
           {/* Header Toko */}
-          <div className="text-center border-b-2 border-gray-800 pb-4 space-y-1">
+          <div className="text-center border-b-2 border-gray-800 pb-4 space-y-1 print:pb-2">
             <h2 className="text-xl sm:text-2xl font-black tracking-wide text-gray-900 uppercase">
               {storeName}
             </h2>
@@ -92,11 +92,11 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
               </p>
             )}
             <div className="pt-2">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-gray-900 bg-gray-100 py-1 px-4 rounded-lg inline-block">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-gray-900 bg-gray-100 py-1 px-4 rounded-lg inline-block print:bg-gray-200">
                 LAPORAN BIAYA & PENGELUARAN TOKO
               </h3>
             </div>
-            <div className="text-[11px] text-gray-500 flex justify-center gap-4 pt-1 font-mono">
+            <div className="text-[11px] text-gray-500 flex justify-center gap-4 pt-1 font-mono flex-wrap">
               <span>Periode: <strong>{periodLabel}</strong></span>
               <span>•</span>
               <span>Filter: <strong>{sourceLabel}</strong></span>
@@ -106,7 +106,7 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
           </div>
 
           {/* 1. Ringkasan Rekapitulasi Biaya & Pengeluaran */}
-          <div className="space-y-2">
+          <div className="space-y-2 break-inside-avoid print:break-inside-avoid">
             <h4 className="font-bold text-gray-900 uppercase tracking-wider text-xs border-b border-gray-200 pb-1">
               1. Rekapitulasi Total Biaya & Pengeluaran
             </h4>
@@ -145,8 +145,8 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
               2. Daftar Rincian Pengeluaran ({expenses.length} Catatan)
             </h4>
             
-            <table className="w-full text-left text-[11px] border-collapse">
-              <thead>
+            <table className="w-full text-left text-[11px] border-collapse print:text-[10px]">
+              <thead className="print:table-header-group">
                 <tr className="bg-gray-100 text-gray-800 border-b border-gray-300 font-bold">
                   <th className="py-2 px-2 text-center w-8">No</th>
                   <th className="py-2 px-2.5 whitespace-nowrap">Tanggal & Waktu</th>
@@ -169,7 +169,7 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
                     const isKasBesar = (exp.source || '').toUpperCase() === 'KAS_BESAR';
 
                     return (
-                      <tr key={exp.id || idx} className="hover:bg-gray-50/80">
+                      <tr key={exp.id || idx} className="hover:bg-gray-50/80 break-inside-avoid print:break-inside-avoid">
                         <td className="py-2 px-2 text-center font-mono text-gray-500">{idx + 1}</td>
                         <td className="py-2 px-2.5 font-mono text-gray-600 whitespace-nowrap">
                           {formatDateTime(exp.created_at)}
@@ -207,8 +207,8 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
                   })
                 )}
               </tbody>
-              <tfoot>
-                <tr className="bg-gray-100 font-bold border-t-2 border-gray-300 text-gray-900 font-mono">
+              <tfoot className="print:table-footer-group">
+                <tr className="bg-gray-100 font-bold border-t-2 border-gray-300 text-gray-900 font-mono break-inside-avoid print:break-inside-avoid">
                   <td colSpan={5} className="py-2 px-3 text-right">TOTAL PENGELUARAN:</td>
                   <td className="py-2 px-3 text-right text-rose-800 text-xs">{formatRupiah(totalExpenseAmount)}</td>
                 </tr>
@@ -217,7 +217,7 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
           </div>
 
           {/* 3. Catatan Standar Kebijakan Finansial */}
-          <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 text-[10px] text-gray-600 space-y-1">
+          <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 text-[10px] text-gray-600 space-y-1 break-inside-avoid print:break-inside-avoid">
             <p className="font-bold text-gray-800">Catatan Standar Pembukuan Finansial Toko:</p>
             <p>
               1. <strong>Belanja Stok ({formatRupiah(totalStockExpenses)}):</strong> Pembelian persediaan barang/sembako adalah konversi kas menjadi <em>Aset Persediaan Toko</em>. HPP barang sudah otomatis terhitung saat produk terjual di kasir, sehingga belanja stok tidak memotong Laba Bersih operasional toko.
@@ -228,7 +228,7 @@ export const CetakBiayaModal: React.FC<CetakBiayaModalProps> = ({
           </div>
 
           {/* Lembar Tanda Tangan */}
-          <div className="pt-6 grid grid-cols-2 gap-8 text-center text-xs">
+          <div className="pt-6 grid grid-cols-2 gap-8 text-center text-xs break-inside-avoid print:break-inside-avoid">
             <div>
               <p className="text-gray-500 mb-12">Petugas Kasir / Pembukuan,</p>
               <p className="font-bold text-gray-900 border-t border-gray-400 pt-1 inline-block min-w-32">
