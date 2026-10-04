@@ -80,13 +80,25 @@ export const UtangView: React.FC<UtangViewProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Effective payment logs
+  const effectivePayments = useMemo(() => {
+    if (debtPayments && debtPayments.length > 0) {
+      return debtPayments;
+    }
+    return getLocalDebtPayments();
+  }, [debtPayments]);
+
+  const totalPaymentsReceived = useMemo(() => {
+    return effectivePayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+  }, [effectivePayments]);
+
   // 1. Unified Debts List (Synthesizes direct debts_credits with any cashier sales made with payment_method === 'UTANG')
   const unifiedDebts = useMemo(() => {
-    const list = [...(debts || [])];
+    const rawList: DebtCredit[] = [...(debts || [])];
     const existingTags = new Set(
-      list.map((d) => (d.notes || '').toLowerCase()).filter(Boolean)
+      rawList.map((d) => (d.notes || '').toLowerCase()).filter(Boolean)
     );
-    const existingIds = new Set(list.map((d) => d.id));
+    const existingIds = new Set(rawList.map((d) => d.id));
 
     // Check sales with payment_method === 'UTANG'
     if (sales && sales.length > 0) {
@@ -95,23 +107,21 @@ export const UtangView: React.FC<UtangViewProps> = ({
           const shortId = (s.id || '').slice(0, 8).toLowerCase();
           const alreadyTracked = Array.from(existingTags).some(tag => tag.includes(shortId)) ||
             existingIds.has(s.id) ||
-            list.some(d => d.notes && d.notes.includes(s.id));
+            rawList.some(d => d.notes && d.notes.toLowerCase().includes(shortId));
 
           if (!alreadyTracked) {
             const custName = (s.customer_name || (s.notes ? s.notes.replace(/^Pelanggan:\s*/i, '').split('•')[0] : '')).trim() || 'Pelanggan Kasir';
-            const isLunas = (s.status || '').toLowerCase() === 'paid';
-            const isPartial = (s.status || '').toLowerCase() === 'partial';
             const total = Number(s.total_amount) || 0;
-            const remaining = isLunas ? 0 : total;
+            const isSaleExplicitPaid = (s.status || '').toLowerCase() === 'paid';
 
-            list.push({
+            rawList.push({
               id: `sale_debt_${s.id}`,
               type: 'PIUTANG',
               customer_or_supplier_name: custName,
               phone_number: s.customer_phone || null,
               total_amount: total,
-              remaining_amount: remaining,
-              status: isLunas ? 'paid' : isPartial ? 'partial' : 'unpaid',
+              remaining_amount: isSaleExplicitPaid ? 0 : total,
+              status: isSaleExplicitPaid ? 'paid' : 'unpaid',
               due_date: null,
               notes: `Transaksi kasir #${s.id ? s.id.slice(0, 8) : ''}`,
               created_at: s.created_at || new Date().toISOString(),
@@ -121,8 +131,60 @@ export const UtangView: React.FC<UtangViewProps> = ({
       }
     }
 
-    return list;
-  }, [debts, sales]);
+    // Cross-reference with effectivePayments & sales to guarantee 100% accurate remaining_amount & status
+    return rawList.map((item) => {
+      const total = Number(item.total_amount) || 0;
+      const itemId = String(item.id || '').toLowerCase();
+      const rawSaleId = itemId.replace('sale_debt_', '');
+      const shortId = rawSaleId.slice(0, 8);
+      const itemNotes = (item.notes || '').toLowerCase();
+
+      // Check if matching sale is marked paid in sales array
+      const matchingSale = sales.find(s => 
+        s.id.toLowerCase() === rawSaleId || 
+        s.id.toLowerCase().startsWith(shortId) ||
+        (s.notes && s.notes.toLowerCase().includes(shortId))
+      );
+      const isSalePaid = matchingSale ? (matchingSale.status || '').toLowerCase() === 'paid' : false;
+
+      // Sum all recorded payments matching this item
+      const paidSoFar = effectivePayments
+        .filter((p) => {
+          if (!p) return false;
+          const pDebtId = String(p.debt_id || '').toLowerCase();
+          const pNotes = String(p.notes || '').toLowerCase();
+
+          if (pDebtId && (pDebtId === itemId || pDebtId === rawSaleId || (shortId.length >= 6 && pDebtId.includes(shortId)))) {
+            return true;
+          }
+          if (shortId.length >= 6 && pNotes.includes(shortId)) {
+            return true;
+          }
+          if (pNotes.includes(itemId) || pNotes.includes(rawSaleId)) {
+            return true;
+          }
+          if (itemNotes && itemNotes.includes('transaksi kasir') && pNotes.includes(itemNotes)) {
+            return true;
+          }
+          return false;
+        })
+        .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+
+      const isExplicitPaid = item.status === 'paid' || isSalePaid;
+      const calculatedRemaining = isExplicitPaid 
+        ? 0 
+        : Math.max(0, (item.remaining_amount !== undefined && item.remaining_amount !== null && !itemId.startsWith('sale_debt_') ? Math.min(Number(item.remaining_amount), total - paidSoFar) : total - paidSoFar));
+
+      const isLunas = isExplicitPaid || calculatedRemaining <= 0;
+      const isPartial = !isLunas && (item.status === 'partial' || paidSoFar > 0);
+
+      return {
+        ...item,
+        remaining_amount: isLunas ? 0 : calculatedRemaining,
+        status: (isLunas ? 'paid' : isPartial ? 'partial' : 'unpaid') as 'paid' | 'partial' | 'unpaid',
+      };
+    });
+  }, [debts, sales, effectivePayments]);
 
   // Totals calculations
   const totalPiutang = useMemo(() => {
@@ -143,18 +205,6 @@ export const UtangView: React.FC<UtangViewProps> = ({
       (d) => d.status !== 'paid' && d.due_date && d.due_date <= today && (Number(d.remaining_amount) || 0) > 0
     ).length;
   }, [unifiedDebts]);
-
-  // Effective payment logs
-  const effectivePayments = useMemo(() => {
-    if (debtPayments && debtPayments.length > 0) {
-      return debtPayments;
-    }
-    return getLocalDebtPayments();
-  }, [debtPayments]);
-
-  const totalPaymentsReceived = useMemo(() => {
-    return effectivePayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
-  }, [effectivePayments]);
 
   // Sales made with UTANG
   const utangSales = useMemo(() => {
@@ -262,7 +312,7 @@ export const UtangView: React.FC<UtangViewProps> = ({
         notes: `Pelunasan ${isPiutang ? 'piutang pelanggan' : 'utang supplier'} (${paymentMethod}): ${payModalItem.customer_or_supplier_name}${payModalItem.notes ? ` [${payModalItem.notes}]` : ''}`,
       });
 
-      if (saleIdMatch && amount >= Number(payModalItem.remaining_amount)) {
+      if (saleIdMatch) {
         await handlePelunasanUtang(saleIdMatch, amount);
       }
 
@@ -271,6 +321,7 @@ export const UtangView: React.FC<UtangViewProps> = ({
       }
 
       playBeep('success');
+      alert(`Pelunasan berhasil dicatat! Kas Toko bertambah ${formatRupiah(amount)}`);
       setPayModalItem(null);
       setPaymentInput('');
       setPaymentMethod('TUNAI');
