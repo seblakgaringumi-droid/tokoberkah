@@ -2435,3 +2435,117 @@ export async function seedInitialProductsIfEmpty(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Fungsi Pelunasan Utang (handlePelunasanUtang)
+ * Saat pelanggan membayar utangnya, panggil fungsi ini agar kas masuk dan status nota diperbarui.
+ * Mendukung update ke tabel orders / sales / debts_credits dan mencatat transaksi ke kas laci (kas_transactions / debt_payments).
+ */
+export async function handlePelunasanUtang(orderId: string | number, jumlahBayar: number): Promise<boolean> {
+  const cleanId = String(orderId);
+  const orderIdStr = cleanId.length >= 8 ? cleanId.substring(0, 8) : cleanId;
+  const numOrderId = Number(cleanId.replace(/\D/g, ''));
+
+  try {
+    // 1. Update status nota di database dari UTANG menjadi LUNAS (di tabel orders jika orderId berupa pesanan)
+    if (!isNaN(numOrderId) && numOrderId > 0) {
+      try {
+        const { error: updateOrderError } = await supabase
+          .from('orders')
+          .update({
+            status_pembayaran: 'LUNAS',
+            tanggal_lunas: new Date().toISOString()
+          })
+          .eq('id', numOrderId);
+
+        if (updateOrderError) {
+          console.warn('Note updating orders table for handlePelunasanUtang:', updateOrderError.message);
+        }
+      } catch (ordErr) {
+        console.warn('Orders update error in handlePelunasanUtang:', ordErr);
+      }
+    }
+
+    // Update status penjualan di tabel sales jika orderId mengarah ke id nota penjualan kasir
+    try {
+      await supabase
+        .from('sales')
+        .update({
+          status: 'paid',
+        })
+        .or(`id.eq.${cleanId},id.ilike.${cleanId}%,notes.ilike.%${cleanId}%`);
+    } catch (saleErr) {
+      console.warn('Sales status update note:', saleErr);
+    }
+
+    // Update status di debts_credits jika ada catatan piutang yang bersesuaian
+    try {
+      const { data: matchedDebts } = await supabase
+        .from('debts_credits')
+        .select('*')
+        .or(`id.eq.${cleanId},notes.ilike.%${cleanId}%,notes.ilike.%${orderIdStr}%`);
+
+      if (matchedDebts && matchedDebts.length > 0) {
+        for (const d of matchedDebts) {
+          const newRemaining = Math.max(0, (Number(d.remaining_amount) || 0) - jumlahBayar);
+          await supabase
+            .from('debts_credits')
+            .update({
+              remaining_amount: newRemaining,
+              status: newRemaining <= 0 ? 'paid' : 'partial'
+            })
+            .eq('id', d.id);
+        }
+      }
+    } catch (debtErr) {
+      console.warn('Debts sync note:', debtErr);
+    }
+
+    // 2. Catat Transaksi Masuk ke Kas Laci (kas_transactions)
+    try {
+      const { error: insertKasError } = await supabase
+        .from('kas_transactions')
+        .insert([
+          {
+            jenis: 'pemasukan',
+            kategori: 'Pelunasan Utang Pelanggan',
+            jumlah: jumlahBayar,
+            keterangan: `Pelunasan Nota #${orderIdStr}`,
+            created_at: new Date().toISOString()
+          }
+        ]);
+
+      if (insertKasError) {
+        console.warn('Catatan kas_transactions note:', insertKasError.message);
+      }
+    } catch (kasErr) {
+      console.warn('kas_transactions insert exception:', kasErr);
+    }
+
+    // Catat ke local debt_payments / cash_flow cache agar langsung masuk ringkasan kas laci & laporan
+    try {
+      const newPayment: DebtPayment = {
+        id: `dp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        debt_id: cleanId,
+        customer_name: `Pelanggan Nota #${orderIdStr}`,
+        amount: jumlahBayar,
+        payment_method: 'TUNAI',
+        type: 'INCOME_DEBT_PAYMENT',
+        created_at: new Date().toISOString(),
+        notes: `Pelunasan Nota #${orderIdStr}`,
+      };
+      const cachedPayments = getLocalDebtPayments();
+      saveLocalDebtPayments([newPayment, ...cachedPayments]);
+    } catch (cacheErr) {
+      console.warn('Cache debt payment error:', cacheErr);
+    }
+
+    alert('Pelunasan berhasil dicatat! Kas Toko bertambah Rp ' + jumlahBayar.toLocaleString('id-ID'));
+    return true;
+  } catch (err: any) {
+    console.error('Gagal mencatat pelunasan:', err.message);
+    alert('Gagal mencatat pelunasan: ' + (err.message || err));
+    return false;
+  }
+}
+
