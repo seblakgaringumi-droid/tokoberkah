@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // Project Supabase Resmi Toko Berkah
 export const DEFAULT_SUPABASE_URL = 'https://bjogkxquvqgikypjpmkz.supabase.co';
-export const DEFAULT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqb2dreHF1dnFnaWt5cGpwbWt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4NzkyMDgsImV4cCI6MjEwNjQ1NTIwOH0.RX8bmKXzG4vWAhw7c4TGxxuvRyXWYnYdwhIK5oMEg2seyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqb2dreHF1dnFnaWt5cGpwbWt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4NzkyMDgsImV4cCI6MjEwNjQ1NTIwOH0.RX8bmKXzG4vWAhw7c4TGxxuvRyXWYnYdwhIK5oMEg2s';
+export const DEFAULT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqb2dreHF1dnFnaWt5cGpwbWt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4NzkyMDgsImV4cCI6MjEwNjQ1NTIwOH0.RX8bmKXzG4vWAhw7c4TGxxuvRyXWYnYdwhIK5oMEg2s';
 
 export const getActiveSupabaseUrl = (): string => {
   if (typeof window !== 'undefined') {
