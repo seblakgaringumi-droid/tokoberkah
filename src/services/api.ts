@@ -776,8 +776,13 @@ export function parseNotesToItems(
   const trimmed = (notesStr || '').trim();
 
   // Parse daftar item dari isi catatan (notes)
-  if (trimmed && !trimmed.startsWith('Transaksi kasir') && trimmed !== 'null' && trimmed !== '-') {
-    const clean = trimmed.replace(/^Pelanggan:\s*[^•]+\s*•\s*/i, '').replace(/^Pelanggan:\s*/i, '').trim();
+  if (trimmed && trimmed !== 'null' && trimmed !== '-') {
+    const clean = trimmed
+      .replace(/^Transaksi kasir\s+[a-f0-9-]+\s*•?\s*/i, '')
+      .replace(/^Pelanggan:\s*[^•]+\s*•\s*/i, '')
+      .replace(/^Pelanggan:\s*/i, '')
+      .trim();
+
     if (clean) {
       const parts = clean.split(/,\s*|\s*•\s*/).map(p => p.trim()).filter(Boolean);
       if (parts.length > 0) {
@@ -874,10 +879,24 @@ export function parseNotesToItems(
 export async function fetchSales(): Promise<Sale[]> {
   const localCached = getLocalSales();
   const localProducts = getLocalProducts();
-  const productMap: Record<string, Product> = {};
-  localProducts.forEach(p => { productMap[p.id] = p; });
 
   try {
+    // 1. Fetch products from Supabase to ensure complete productMap
+    let dbProducts: Product[] = [];
+    try {
+      const { data: pData } = await supabase.from('products').select('*');
+      if (pData && pData.length > 0) {
+        dbProducts = pData;
+        saveLocalProducts(pData);
+      }
+    } catch (pErr) {
+      console.warn('Fetch products in fetchSales error:', pErr);
+    }
+
+    const allProductsList = dbProducts.length > 0 ? dbProducts : localProducts;
+    const productMap: Record<string, Product> = {};
+    allProductsList.forEach(p => { if (p && p.id) productMap[p.id] = p; });
+
     const { data: salesData, error: salesError } = await supabase
       .from('sales')
       .select('*')
@@ -907,7 +926,9 @@ export async function fetchSales(): Promise<Sale[]> {
       const sKey = String(it.sale_id).toLowerCase().trim();
       if (!sKey || sKey === 'undefined' || sKey === 'null') continue;
       if (!itemsBySaleId[sKey]) itemsBySaleId[sKey] = [];
-      const prod = productMap[it.product_id] || {
+      const matchedProd = productMap[it.product_id] || allProductsList.find(p => p.id === it.product_id || (p.id && String(p.id).toLowerCase() === String(it.product_id).toLowerCase()));
+
+      const prod = matchedProd || {
         id: it.product_id,
         name: (it as any).product_name || 'Barang Sembako',
         category: 'Sembako',
@@ -1016,9 +1037,13 @@ export async function fetchSales(): Promise<Sale[]> {
         }
       }
 
-      // If still empty, parse item list from notes or construct structured fallback
-      if (items.length === 0) {
-        items = parseNotesToItems(s.notes, Number(s.total_amount), localProducts);
+      // If items is empty OR items contains generic placeholder names ("Barang Sembako"), enrich/parse from notes
+      const hasGenericItems = items.length > 0 && items.every(it => !it.product?.name || it.product?.name === 'Barang Sembako');
+      if (items.length === 0 || hasGenericItems) {
+        const parsedFromNotes = parseNotesToItems(s.notes, Number(s.total_amount), allProductsList);
+        if (parsedFromNotes.length > 0) {
+          items = parsedFromNotes;
+        }
       }
 
       return {
