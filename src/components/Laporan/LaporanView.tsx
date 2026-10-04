@@ -40,7 +40,7 @@ import {
 import { Sale, Expense, StoreWallet, StoreProfile, DebtPayment, DebtCredit, SaleItem, Product } from '../../types';
 import { formatRupiah, formatDate, formatDateTime, playBeep, isStockExpense, getLocalDate, isValidSale } from '../../lib/utils';
 import { useFinance } from '../../context/FinanceContext';
-import { createExpense, deleteExpense, cleanupDuplicateExpenses, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo, getLocalOrders, getLocalProducts } from '../../services/api';
+import { createExpense, deleteExpense, cleanupDuplicateExpenses, updateStoreWallet, upsertStoreWallet, syncCompletedOrdersToSales, getLocalDebtPayments, getSaleDebtInfo, getLocalOrders, getLocalProducts, getLocalSales, parseNotesToItems } from '../../services/api';
 import { ReceiptModal } from '../ReceiptModal';
 import { ArusKasLaciCard } from './ArusKasLaciCard';
 import { SinkingFundCard } from './SinkingFundCard';
@@ -1244,7 +1244,19 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         return sale.sale_items;
                       }
 
-                      // 1. Cek dari catatan pesanan online (#ORD-xxx)
+                      // 1. Cek di local sales cache berdasarkan ID / Timestamp + Total Amount
+                      const localSalesList = getLocalSales();
+                      const matchedLocal = localSalesList.find((ls) => {
+                        if (!ls || (!ls.items?.length && !ls.sale_items?.length)) return false;
+                        if (ls.id === sale.id || (ls.id && sale.id && (ls.id.startsWith(sale.id.slice(0, 8)) || sale.id.startsWith(ls.id.slice(0, 8))))) return true;
+                        const tL = ls.created_at ? new Date(ls.created_at).getTime() : 0;
+                        const tS = sale.created_at ? new Date(sale.created_at).getTime() : 0;
+                        return Math.abs(tL - tS) < 180000 && Number(ls.total_amount) === Number(sale.total_amount);
+                      });
+                      if (matchedLocal?.items && matchedLocal.items.length > 0) return matchedLocal.items;
+                      if (matchedLocal?.sale_items && matchedLocal.sale_items.length > 0) return matchedLocal.sale_items;
+
+                      // 2. Cek dari catatan pesanan online (#ORD-xxx)
                       const orderMatch = (sale.notes || '').match(/#ORD-(\d+)/i) || (sale.notes || '').match(/ORD-(\d+)/i) || sale.id.match(/sale_online_(\d+)/i);
                       if (orderMatch && orderMatch[1]) {
                         const ordId = Number(orderMatch[1]);
@@ -1285,290 +1297,10 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         }
                       }
 
-                      // 2. Data Riwayat Transaksi Aktual Toko Berkah
-                      const tot = Number(sale.total_amount) || 0;
-                      const timeStr = sale.created_at ? new Date(sale.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '';
-
-                      // 14.000 (18:19) - Telur Ayam Ras 1 Satengah
-                      if (tot === 14000) {
-                        return [{
-                          id: `hist_item_${sale.id}_0`,
-                          sale_id: sale.id,
-                          product_id: 'prod_telur_satengah',
-                          qty_kg: 0.5,
-                          qty: 1,
-                          subtotal: 14000,
-                          cost_price: 11000,
-                          original_qty: 1,
-                          unit: 'Satengah',
-                          product: {
-                            id: 'prod_telur_satengah',
-                            name: 'Telur Ayam Ras',
-                            category: 'Sembako',
-                            selling_price: 14000,
-                            cost_price: 11000,
-                            stock_kg: 0,
-                            min_stock: 0,
-                            is_active: true,
-                            image_url: null,
-                            unit: 'Satengah',
-                            barcode: null,
-                          },
-                        }];
-                      }
-
-                      // 22.000 (16:12) - Telur 1 Saparapat, Mie Sedap, Pepsodent, Minyak Curah 1 Saparapat
-                      if (tot === 22000) {
-                        return [
-                          {
-                            id: `hist_item_${sale.id}_0`,
-                            sale_id: sale.id,
-                            product_id: 'prod_telur_saparapat',
-                            qty_kg: 0.25,
-                            qty: 1,
-                            subtotal: 7000,
-                            cost_price: 5500,
-                            original_qty: 1,
-                            unit: 'Saparapat',
-                            product: {
-                              id: 'prod_telur_saparapat',
-                              name: 'Telur Ayam Ras',
-                              category: 'Sembako',
-                              selling_price: 7000,
-                              cost_price: 5500,
-                              stock_kg: 0,
-                              min_stock: 0,
-                              is_active: true,
-                              image_url: null,
-                              unit: 'Saparapat',
-                              barcode: null,
-                            },
-                          },
-                          {
-                            id: `hist_item_${sale.id}_1`,
-                            sale_id: sale.id,
-                            product_id: 'prod_mie_sedap_kari',
-                            qty_kg: 1,
-                            qty: 1,
-                            subtotal: 4000,
-                            cost_price: 3200,
-                            original_qty: 1,
-                            unit: 'Pcs',
-                            product: {
-                              id: 'prod_mie_sedap_kari',
-                              name: 'Mie Sedap Kari Special',
-                              category: 'Makanan Instan',
-                              selling_price: 4000,
-                              cost_price: 3200,
-                              stock_kg: 0,
-                              min_stock: 0,
-                              is_active: true,
-                              image_url: null,
-                              unit: 'Pcs',
-                              barcode: null,
-                            },
-                          },
-                          {
-                            id: `hist_item_${sale.id}_2`,
-                            sale_id: sale.id,
-                            product_id: 'prod_pepsodent_75',
-                            qty_kg: 1,
-                            qty: 1,
-                            subtotal: 5000,
-                            cost_price: 4000,
-                            original_qty: 1,
-                            unit: 'Pcs',
-                            product: {
-                              id: 'prod_pepsodent_75',
-                              name: 'Pepsodent 75 gr',
-                              category: 'Kebutuhan Harian',
-                              selling_price: 5000,
-                              cost_price: 4000,
-                              stock_kg: 0,
-                              min_stock: 0,
-                              is_active: true,
-                              image_url: null,
-                              unit: 'Pcs',
-                              barcode: null,
-                            },
-                          },
-                          {
-                            id: `hist_item_${sale.id}_3`,
-                            sale_id: sale.id,
-                            product_id: 'prod_minyak_curah_saparapat',
-                            qty_kg: 0.25,
-                            qty: 1,
-                            subtotal: 6000,
-                            cost_price: 4800,
-                            original_qty: 1,
-                            unit: 'Saparapat',
-                            product: {
-                              id: 'prod_minyak_curah_saparapat',
-                              name: 'Minyak Goreng Curah',
-                              category: 'Sembako',
-                              selling_price: 6000,
-                              cost_price: 4800,
-                              stock_kg: 0,
-                              min_stock: 0,
-                              is_active: true,
-                              image_url: null,
-                              unit: 'Saparapat',
-                              barcode: null,
-                            },
-                          },
-                        ];
-                      }
-
-                      // 13.500 (11:33) - Telur Ayam Ras 500 Gram
-                      if (tot === 13500) {
-                        return [{
-                          id: `hist_item_${sale.id}_0`,
-                          sale_id: sale.id,
-                          product_id: 'prod_telur_500g',
-                          qty_kg: 0.5,
-                          qty: 500,
-                          subtotal: 13500,
-                          cost_price: 11000,
-                          original_qty: 500,
-                          unit: 'Gram',
-                          product: {
-                            id: 'prod_telur_500g',
-                            name: 'Telur Ayam Ras',
-                            category: 'Sembako',
-                            selling_price: 27,
-                            cost_price: 22,
-                            stock_kg: 0,
-                            min_stock: 0,
-                            is_active: true,
-                            image_url: null,
-                            unit: 'Gram',
-                            barcode: null,
-                          },
-                        }];
-                      }
-
-                      // 38.000 (10:41) - Beras Gunung Cupu 2 Kg, Telur Ayam Ras 250 Gram
-                      if (tot === 38000) {
-                        return [
-                          {
-                            id: `hist_item_${sale.id}_0`,
-                            sale_id: sale.id,
-                            product_id: 'prod_beras_gunung_cupu',
-                            qty_kg: 2,
-                            qty: 2,
-                            subtotal: 31000,
-                            cost_price: 26000,
-                            original_qty: 2,
-                            unit: 'Kg',
-                            product: {
-                              id: 'prod_beras_gunung_cupu',
-                              name: 'Beras Gunung Cupu',
-                              category: 'Sembako',
-                              selling_price: 15500,
-                              cost_price: 13000,
-                              stock_kg: 0,
-                              min_stock: 0,
-                              is_active: true,
-                              image_url: null,
-                              unit: 'Kg',
-                              barcode: null,
-                            },
-                          },
-                          {
-                            id: `hist_item_${sale.id}_1`,
-                            sale_id: sale.id,
-                            product_id: 'prod_telur_250g',
-                            qty_kg: 0.25,
-                            qty: 250,
-                            subtotal: 7000,
-                            cost_price: 5500,
-                            original_qty: 250,
-                            unit: 'Gram',
-                            product: {
-                              id: 'prod_telur_250g',
-                              name: 'Telur Ayam Ras',
-                              category: 'Sembako',
-                              selling_price: 28,
-                              cost_price: 22,
-                              stock_kg: 0,
-                              min_stock: 0,
-                              is_active: true,
-                              image_url: null,
-                              unit: 'Gram',
-                              barcode: null,
-                            },
-                          },
-                        ];
-                      }
-
-                      // 16.000 (07:09) - Beras Pulen Premium Lokal 1 Kg
-                      if (tot === 16000) {
-                        return [{
-                          id: `hist_item_${sale.id}_0`,
-                          sale_id: sale.id,
-                          product_id: 'prod_beras_pulen_1kg',
-                          qty_kg: 1,
-                          qty: 1,
-                          subtotal: 16000,
-                          cost_price: 13500,
-                          original_qty: 1,
-                          unit: 'Kg',
-                          product: {
-                            id: 'prod_beras_pulen_1kg',
-                            name: 'Beras Pulen Premium Lokal',
-                            category: 'Sembako',
-                            selling_price: 16000,
-                            cost_price: 13500,
-                            stock_kg: 0,
-                            min_stock: 0,
-                            is_active: true,
-                            image_url: null,
-                            unit: 'Kg',
-                            barcode: null,
-                          },
-                        }];
-                      }
-
-                      // 3. Cek jika catatan transaksi (notes) berisi daftar rincian barang dari kasir
-                      const notesRaw = (sale.notes || '').trim();
-                      if (notesRaw && !notesRaw.startsWith('Transaksi kasir') && !notesRaw.startsWith('Pelanggan: Pelanggan')) {
-                        const cleanedNote = notesRaw.replace(/^Pelanggan:\s*[^•]+\s*•\s*/i, '').replace(/^Pelanggan:\s*/i, '');
-                        if (cleanedNote && cleanedNote.includes('(') && cleanedNote.includes(')')) {
-                          const parts = cleanedNote.split(/,\s*/);
-                          if (parts.length > 0) {
-                            const subPerItem = Math.round((Number(sale.total_amount) || 0) / parts.length);
-                            return parts.map((part, pIdx) => {
-                              const qtyMatch = part.match(/\(([\d.]+)\s*([a-zA-Z]+)\)/);
-                              const pName = part.replace(/\s*\([\d.]+\s*[a-zA-Z]+\)/, '').trim();
-                              const q = qtyMatch ? parseFloat(qtyMatch[1]) : 1;
-                              const u = qtyMatch ? qtyMatch[2] : 'pcs';
-                              return {
-                                id: `parsed_note_item_${sale.id}_${pIdx}`,
-                                sale_id: sale.id,
-                                product_id: `prod_note_${pIdx}`,
-                                qty_kg: q,
-                                qty: q,
-                                subtotal: subPerItem,
-                                cost_price: Math.round(subPerItem * 0.8),
-                                original_qty: q,
-                                unit: u,
-                                product: {
-                                  id: `prod_note_${pIdx}`,
-                                  name: pName || 'Barang Sembako',
-                                  category: 'Sembako',
-                                  selling_price: subPerItem,
-                                  cost_price: Math.round(subPerItem * 0.8),
-                                  stock_kg: 0,
-                                  min_stock: 0,
-                                  is_active: true,
-                                  image_url: null,
-                                  unit: u,
-                                  barcode: null,
-                                },
-                              };
-                            });
-                          }
-                        }
+                      // 3. Robust parser dari catatan transaksi (notes) & master produk
+                      const parsedFromNotes = parseNotesToItems(sale.notes, Number(sale.total_amount), allProducts);
+                      if (parsedFromNotes.length > 0) {
+                        return parsedFromNotes;
                       }
 
                       return [];
