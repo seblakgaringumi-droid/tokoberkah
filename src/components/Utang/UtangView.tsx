@@ -784,13 +784,7 @@ export const UtangView: React.FC<UtangViewProps> = ({
                                   onClick={() => {
                                     setPayModalItem(item);
                                     setPaymentInput(item.remaining_amount);
-                                    const itemDate = item.created_at ? item.created_at.substring(0, 10) : '';
-                                    const todayStr = getLocalDate();
-                                    if (itemDate && itemDate < todayStr) {
-                                      setPaymentMethod('KOREKSI_MASA_LALU' as any);
-                                    } else {
-                                      setPaymentMethod('TUNAI');
-                                    }
+                                    setPaymentMethod('KOREKSI_MASA_LALU' as any);
                                   }}
                                   className="px-3 py-1 bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs font-bold rounded-lg transition-colors shadow-xs cursor-pointer"
                                 >
@@ -895,6 +889,7 @@ export const UtangView: React.FC<UtangViewProps> = ({
                             onClick={() => {
                               setPayModalItem(item);
                               setPaymentInput(item.remaining_amount);
+                              setPaymentMethod('KOREKSI_MASA_LALU' as any);
                             }}
                             className="px-3 py-1.5 bg-[#2E7D32] text-white font-bold rounded-lg shadow-xs cursor-pointer"
                           >
