@@ -69,8 +69,8 @@ export const CetakLaporanModal: React.FC<CetakLaporanModalProps> = ({
   const totalIdealReserve = totalAccumulatedRent + totalAccumulatedBank;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl space-y-6 my-6 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto print:static print:p-0 print:bg-transparent print:overflow-visible print:block print:h-auto print:max-h-none">
+      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl space-y-6 my-6 max-h-[90vh] overflow-y-auto print:p-0 print:m-0 print:max-w-none print:shadow-none print:rounded-none print:max-h-none print:overflow-visible print:h-auto print:w-full print:block">
         {/* Modal Top Control Bar (Hidden on print) */}
         <div className="flex justify-between items-center border-b border-gray-100 pb-4 print:hidden">
           <div>
