@@ -49,6 +49,7 @@ import { TrenChartCard } from './TrenChartCard';
 import { AnalisisBEPModal } from './AnalisisBEPModal';
 import { OpnameKasModal } from './OpnameKasModal';
 import { CetakLaporanModal } from './CetakLaporanModal';
+import { CetakBiayaModal } from './CetakBiayaModal';
 import { DetailStrukModal } from './DetailStrukModal';
 import { CalendarRangeModal } from './CalendarRangeModal';
 
@@ -144,6 +145,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
   const [isBEPModalOpen, setIsBEPModalOpen] = useState(false);
   const [isOpnameModalOpen, setIsOpnameModalOpen] = useState(false);
   const [isCetakModalOpen, setIsCetakModalOpen] = useState(false);
+  const [isCetakBiayaModalOpen, setIsCetakBiayaModalOpen] = useState(false);
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
 
   // Store Wallet Edit Modal
@@ -1748,19 +1750,30 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
               <h3 className="font-bold text-gray-900 text-base">Biaya & Pengeluaran Toko</h3>
               <p className="text-xs text-gray-500">Catatan operasional, belanja stok laci, listrik, bensin, plastik, dan kas besar.</p>
             </div>
-            <button
-              onClick={() => {
-                setExpenseTitle('');
-                setExpenseAmount('');
-                setExpenseCategory('OPERASIONAL');
-                setExpenseSource('LACI');
-                setIsExpenseModalOpen(true);
-              }}
-              className="px-4 py-2 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 shadow-xs cursor-pointer self-start sm:self-auto"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Catat Pengeluaran Baru</span>
-            </button>
+            <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+              <button
+                type="button"
+                onClick={() => setIsCetakBiayaModalOpen(true)}
+                className="px-3.5 py-2 rounded-xl bg-white hover:bg-gray-100 text-gray-800 text-xs sm:text-sm font-semibold flex items-center gap-1.5 border border-gray-300 shadow-2xs cursor-pointer transition-colors"
+                title="Cetak PDF Laporan Biaya & Pengeluaran"
+              >
+                <Printer className="w-4 h-4 text-emerald-700" />
+                <span>Cetak PDF Laporan Biaya</span>
+              </button>
+              <button
+                onClick={() => {
+                  setExpenseTitle('');
+                  setExpenseAmount('');
+                  setExpenseCategory('OPERASIONAL');
+                  setExpenseSource('LACI');
+                  setIsExpenseModalOpen(true);
+                }}
+                className="px-4 py-2 rounded-xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Catat Pengeluaran Baru</span>
+              </button>
+            </div>
           </div>
 
           {/* Filter Source Tabs & Summary Cards */}
@@ -2315,7 +2328,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         onWalletUpdated={onWalletUpdated}
       />
 
-      {/* Quick Action Modal: Cetak PDF Laporan */}
+      {/* Quick Action Modal: Cetak PDF Laporan Keuangan */}
       <CetakLaporanModal
         isOpen={isCetakModalOpen}
         onClose={() => setIsCetakModalOpen(false)}
@@ -2337,6 +2350,22 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
         salesCount={filteredSales.length}
         expensesCount={filteredExpenses.length}
         storeProfile={storeProfile}
+      />
+
+      {/* Quick Action Modal: Cetak PDF Laporan Biaya & Pengeluaran Toko */}
+      <CetakBiayaModal
+        isOpen={isCetakBiayaModalOpen}
+        onClose={() => setIsCetakBiayaModalOpen(false)}
+        periodLabel={getPeriodLabel()}
+        expenses={displayedExpenses}
+        totalExpenseAmount={totalExpenseAmount}
+        totalOperationalExpenses={totalOperationalExpenses}
+        totalStockExpenses={totalStockExpenses}
+        drawerOperationalExpenses={drawerOperationalExpenses}
+        drawerStockExpenses={drawerStockExpenses}
+        kasBesarExpenses={kasBesarExpenses}
+        storeProfile={storeProfile}
+        sourceFilter={expenseSourceFilter}
       />
 
       {/* Detail Struk Modal */}
