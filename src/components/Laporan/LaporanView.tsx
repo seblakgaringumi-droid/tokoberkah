@@ -1237,11 +1237,16 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                       ? products 
                       : (typeof getLocalProducts === 'function' ? getLocalProducts() : []);
                     const items: SaleItem[] = (() => {
+                      let candidateItems: SaleItem[] = [];
                       if (sale.items && Array.isArray(sale.items) && sale.items.length > 0) {
-                        return sale.items;
+                        candidateItems = sale.items;
+                      } else if (sale.sale_items && Array.isArray(sale.sale_items) && sale.sale_items.length > 0) {
+                        candidateItems = sale.sale_items;
                       }
-                      if (sale.sale_items && Array.isArray(sale.sale_items) && sale.sale_items.length > 0) {
-                        return sale.sale_items;
+
+                      const hasGeneric = candidateItems.length > 0 && candidateItems.every(it => !it.product?.name || it.product?.name === 'Barang Sembako');
+                      if (candidateItems.length > 0 && !hasGeneric) {
+                        return candidateItems;
                       }
 
                       // 1. Cek di local sales cache berdasarkan ID / Timestamp + Total Amount
@@ -1253,8 +1258,12 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         const tS = sale.created_at ? new Date(sale.created_at).getTime() : 0;
                         return Math.abs(tL - tS) < 180000 && Number(ls.total_amount) === Number(sale.total_amount);
                       });
-                      if (matchedLocal?.items && matchedLocal.items.length > 0) return matchedLocal.items;
-                      if (matchedLocal?.sale_items && matchedLocal.sale_items.length > 0) return matchedLocal.sale_items;
+                      if (matchedLocal?.items && matchedLocal.items.length > 0 && !matchedLocal.items.every(it => !it.product?.name || it.product?.name === 'Barang Sembako')) {
+                        return matchedLocal.items;
+                      }
+                      if (matchedLocal?.sale_items && matchedLocal.sale_items.length > 0 && !matchedLocal.sale_items.every(it => !it.product?.name || it.product?.name === 'Barang Sembako')) {
+                        return matchedLocal.sale_items;
+                      }
 
                       // 2. Cek dari catatan pesanan online (#ORD-xxx)
                       const orderMatch = (sale.notes || '').match(/#ORD-(\d+)/i) || (sale.notes || '').match(/ORD-(\d+)/i) || sale.id.match(/sale_online_(\d+)/i);
@@ -1303,7 +1312,7 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
                         return parsedFromNotes;
                       }
 
-                      return [];
+                      return candidateItems;
                     })();
 
                     const effectiveSale = { ...sale, items, sale_items: items };
