@@ -283,14 +283,19 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     const method = (dp.payment_method || '').toUpperCase();
     const notes = (dp.notes || '').toLowerCase();
 
-    // Check if explicitly marked as past adjustment or correction
+    // Check if explicitly marked as past adjustment, correction, or menu utang adjustment
     if (
       method.includes('KOREKSI') ||
       method.includes('NON_KAS') ||
       method.includes('MASA_LALU') ||
       notes.includes('koreksi') ||
       notes.includes('pembukuan masa lalu') ||
-      notes.includes('tanpa masuk laci')
+      notes.includes('tanpa masuk laci') ||
+      notes.includes('menu utang') ||
+      notes.includes('utang masa lalu') ||
+      notes.includes('pelunasan nota') ||
+      notes.includes('pelunasan piutang') ||
+      notes.includes('pelunasan utang')
     ) {
       return true;
     }
