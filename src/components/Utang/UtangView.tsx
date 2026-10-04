@@ -137,7 +137,20 @@ export const UtangView: React.FC<UtangViewProps> = ({
       const itemId = String(item.id || '').toLowerCase();
       const rawSaleId = itemId.replace('sale_debt_', '');
       const shortId = rawSaleId.slice(0, 8);
+      const custNameLower = (item.customer_or_supplier_name || '').toLowerCase();
       const itemNotes = (item.notes || '').toLowerCase();
+
+      // Ensure customer transactions are classified as PIUTANG (Piutang Pelanggan)
+      const isCustomerTransaction =
+        item.type === 'PIUTANG' ||
+        custNameLower.includes('pelanggan') ||
+        custNameLower.includes('transaksi') ||
+        itemNotes.includes('transaksi kasir') ||
+        itemNotes.includes('kasir') ||
+        itemId.startsWith('sale_debt_') ||
+        itemId.startsWith('bon_');
+
+      const correctedType: 'PIUTANG' | 'UTANG' = isCustomerTransaction ? 'PIUTANG' : 'UTANG';
 
       // Check if matching sale is marked paid in sales array
       const matchingSale = sales.find(s => 
@@ -180,6 +193,7 @@ export const UtangView: React.FC<UtangViewProps> = ({
 
       return {
         ...item,
+        type: correctedType,
         remaining_amount: isLunas ? 0 : calculatedRemaining,
         status: (isLunas ? 'paid' : isPartial ? 'partial' : 'unpaid') as 'paid' | 'partial' | 'unpaid',
       };
