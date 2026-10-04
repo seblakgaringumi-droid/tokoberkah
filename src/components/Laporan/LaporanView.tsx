@@ -276,6 +276,63 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     return filteredSales.reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0);
   }, [filteredSales]);
 
+  // Helper to determine if a debt payment is a status correction or for a past debt created before today's shift
+  const isPastDebtPayment = (dp: DebtPayment): boolean => {
+    if (!dp) return false;
+
+    const method = (dp.payment_method || '').toUpperCase();
+    const notes = (dp.notes || '').toLowerCase();
+
+    // Check if explicitly marked as past adjustment or correction
+    if (
+      method.includes('KOREKSI') ||
+      method.includes('NON_KAS') ||
+      method.includes('MASA_LALU') ||
+      notes.includes('koreksi') ||
+      notes.includes('pembukuan masa lalu') ||
+      notes.includes('tanpa masuk laci')
+    ) {
+      return true;
+    }
+
+    // Check if associated debt or sale was created before today
+    const dpDebtId = String(dp.debt_id || '').toLowerCase();
+    const todayStr = getLocalDate();
+
+    const matchedDebt = (debts || []).find((d) => {
+      if (!d) return false;
+      const dId = String(d.id || '').toLowerCase();
+      if (dpDebtId && (dId === dpDebtId || dpDebtId.includes(dId) || dId.includes(dpDebtId))) return true;
+      if (notes && d.notes && notes.includes(d.notes.toLowerCase())) return true;
+      return false;
+    });
+
+    if (matchedDebt && matchedDebt.created_at) {
+      const debtDateStr = matchedDebt.created_at.substring(0, 10);
+      if (debtDateStr < todayStr) {
+        return true;
+      }
+    }
+
+    const matchedSale = (sales || []).find((s) => {
+      if (!s) return false;
+      const sId = String(s.id || '').toLowerCase();
+      const shortId = sId.slice(0, 8);
+      if (dpDebtId && (dpDebtId === sId || dpDebtId.includes(shortId))) return true;
+      if (notes && (notes.includes(sId) || notes.includes(shortId))) return true;
+      return false;
+    });
+
+    if (matchedSale && matchedSale.created_at) {
+      const saleDateStr = matchedSale.created_at.substring(0, 10);
+      if (saleDateStr < todayStr) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
   // Pelunasan Utang Pelanggan (Buku Utang)
   const effectiveDebtPayments = useMemo(() => {
     if (debtPayments && Array.isArray(debtPayments)) {
@@ -292,19 +349,42 @@ export const LaporanView: React.FC<LaporanViewProps> = ({
     return filteredDebtPayments
       .filter((dp) => {
         const m = (dp.payment_method || 'TUNAI').toUpperCase();
+        if (m.includes('KOREKSI') || m.includes('NON_KAS') || m.includes('MASA_LALU')) return false;
+
+        // On today's shift cash drawer view (Hari Ini), exclude past debt status adjustments
+        if (dateFilter === 'hari_ini') {
+          const notes = (dp.notes || '').toLowerCase();
+          const isExplicitShiftCash = notes.includes('laci shift') || notes.includes('kasir shift');
+          const isPastDebt = isPastDebtPayment(dp);
+          if (isPastDebt && !isExplicitShiftCash) {
+            return false;
+          }
+        }
+
         return m === 'TUNAI' || m === 'CASH';
       })
       .reduce((acc, dp) => acc + (Number(dp.amount) || 0), 0);
-  }, [filteredDebtPayments]);
+  }, [filteredDebtPayments, dateFilter, debts, sales]);
 
   const debtPaymentsQris = useMemo(() => {
     return filteredDebtPayments
       .filter((dp) => {
         const m = (dp.payment_method || '').toUpperCase();
+        if (m.includes('KOREKSI') || m.includes('NON_KAS') || m.includes('MASA_LALU')) return false;
+
+        if (dateFilter === 'hari_ini') {
+          const notes = (dp.notes || '').toLowerCase();
+          const isExplicitShiftCash = notes.includes('laci shift') || notes.includes('kasir shift');
+          const isPastDebt = isPastDebtPayment(dp);
+          if (isPastDebt && !isExplicitShiftCash) {
+            return false;
+          }
+        }
+
         return m === 'QRIS' || m === 'BANK' || m === 'TRANSFER';
       })
       .reduce((acc, dp) => acc + (Number(dp.amount) || 0), 0);
-  }, [filteredDebtPayments]);
+  }, [filteredDebtPayments, dateFilter, debts, sales]);
 
   const totalDebtPayments = debtPaymentsCash + debtPaymentsQris;
 
